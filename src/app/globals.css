@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  
+  --color-background: #0f1115;
+  --color-foreground: #e2e8f0;
+  
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
+  
+  --color-danger: #ef4444;
+  --color-danger-hover: #dc2626;
+  
+  --color-success: #22c55e;
+  --color-success-hover: #16a34a;
+  
+  --color-warning: #f59e0b;
+  --color-warning-hover: #d97706;
+
+  --color-surface: rgba(30, 41, 59, 0.7);
+  --color-surface-hover: rgba(30, 41, 59, 0.9);
+  --color-border: rgba(255, 255, 255, 0.1);
+}
+
+@layer base {
+  :root {
+    --background: #0f1115;
+    --foreground: #e2e8f0;
+  }
+  
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    background-image: 
+      radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
+      radial-gradient(at 50% 0%, hsla(225,39%,30%,0.15) 0, transparent 50%), 
+      radial-gradient(at 100% 0%, hsla(339,49%,30%,0.1) 0, transparent 50%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-surface border border-border backdrop-blur-md shadow-xl rounded-2xl;
+  }
+  
+  .glass-input {
+    @apply bg-slate-800/50 border border-border rounded-lg px-4 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all;
+  }
+
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 active:scale-95 flex items-center justify-center gap-2;
+  }
+  
+  .btn-primary {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 active:scale-95 flex items-center justify-center gap-2 bg-blue-500 text-white hover:bg-blue-600 shadow-lg shadow-blue-500/20;
+  }
+  
+  .btn-danger {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 active:scale-95 flex items-center justify-center gap-2 bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/20;
+  }
+  
+  .btn-success {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white hover:bg-green-600 shadow-lg shadow-green-500/20;
+  }
+  
+  .btn-warning {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 active:scale-95 flex items-center justify-center gap-2 bg-amber-500 text-white hover:bg-amber-600 shadow-lg shadow-amber-500/20;
+  }
+  
+  .btn-ghost {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 active:scale-95 flex items-center justify-center gap-2 hover:bg-white/10 text-slate-300 hover:text-white;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
