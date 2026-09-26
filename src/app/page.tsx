@@ -87,8 +87,17 @@ export default function Dashboard() {
 
   const [data, setData] = useState<Subscription[]>([]);
   const [settings, setSettings] = useState<AppSettings>({ apps: [], contacts: [] });
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const detailDialog = useRef<HTMLDialogElement>(null);
+  const detail = data.find(item => item.id === detailId);
+  useEffect(() => {
+    if (detailId && detailDialog.current && !detailDialog.current.open) detailDialog.current.showModal();
+  }, [detailId]);
   const [search, setSearch] = useState('');
   const [expiresSoonFilter, setExpiresSoonFilter] = useState(false);
+  const [expiredFilter, setExpiredFilter] = useState(false);
+  const [appFilter, setAppFilter] = useState('');
+  const [sortBy, setSortBy] = useState('expiration');
   const [unpaidFilter, setUnpaidFilter] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [filterStartDate, setFilterStartDate] = useState("");
@@ -96,7 +105,7 @@ export default function Dashboard() {
   // Modals state
   const [isDeleteModalOpen, setDeleteModalOpen] = useState<string | null>(null);
   const [isEditModalOpen, setEditModalOpen] = useState<Subscription | null>(null);
-  const [isNewModalOpen, setNewModalOpen] = useState(false);
+  const [isNewModalOpen, setNewModalOpen] = useState<boolean | Partial<Subscription>>(false);
   const [isSettingsModalOpen, setSettingsModalOpen] = useState(false);
   const [isAnalyticsModalOpen, setAnalyticsModalOpen] = useState(false);
   const [isManualSyncModalOpen, setManualSyncModalOpen] = useState(false);
@@ -266,7 +275,7 @@ export default function Dashboard() {
 
     // Search filter (Omni-search)
     if (search) {
-      const q = search.toLowerCase();
+      const q = search.trim().toLocaleLowerCase('hr');
       result = result.filter(item => 
         (item.name?.toLowerCase() || '').includes(q) ||
         (item.macAddress?.toLowerCase() || '').includes(q) ||
@@ -279,13 +288,16 @@ export default function Dashboard() {
       );
     }
 
-    // Expires soon filter (<= 15 days)
+    // Upcoming expirations, consistent with the overview card (0–7 days)
     if (expiresSoonFilter) {
       result = result.filter(item => {
         const days = getDaysUntilExpiration(item.expirationDate);
-        return days <= 15;
+        return days >= 0 && days <= 7;
       });
     }
+
+    if (expiredFilter) result = result.filter(item => getDaysUntilExpiration(item.expirationDate) < 0);
+    if (appFilter) result = result.filter(item => item.app === appFilter);
 
     if (unpaidFilter) {
       result = result.filter(item => !item.isPaid);
@@ -318,14 +330,44 @@ export default function Dashboard() {
 
     // Default sorting by expiration date (ascending)
     result.sort((a, b) => {
+      if (sortBy === 'name') return (a.name || '').localeCompare(b.name || '', 'hr');
+      if (sortBy === 'newest') return (b.createdAt || 0) - (a.createdAt || 0);
       const da = parseAnyDate(a.expirationDate || '');
       const db = parseAnyDate(b.expirationDate || '');
       if (da && db) return da.getTime() - db.getTime();
-      return 0;
+      return da ? -1 : db ? 1 : 0;
     });
 
     return result;
-  }, [data, search, expiresSoonFilter, filterStartDate, filterEndDate, showArchived, unpaidFilter]);
+  }, [data, search, expiresSoonFilter, filterStartDate, filterEndDate, showArchived, unpaidFilter, expiredFilter, appFilter, sortBy]);
+
+  const groupedData = useMemo(() => {
+    const map = new Map<string, {
+      name: string;
+      contact: string;
+      phone?: string;
+      email?: string;
+      tags?: string[];
+      subscriptions: Subscription[];
+    }>();
+
+    processedData.forEach(sub => {
+      const key = `${sub.name?.trim().toLowerCase()}_${sub.contact?.trim().toLowerCase()}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          name: sub.name || '',
+          contact: sub.contact || '',
+          phone: sub.phone,
+          email: sub.email,
+          tags: sub.tags,
+          subscriptions: []
+        });
+      }
+      map.get(key)!.subscriptions.push(sub);
+    });
+
+    return Array.from(map.values());
+  }, [processedData]);
 
   const togglePaidStatus = async (id: string, currentStatus: boolean) => {
     await updateSubscription(id, { isPaid: !currentStatus });
@@ -442,10 +484,19 @@ export default function Dashboard() {
   const activeData = data.filter(i => !i.isArchived);
   const stats = {
     totalActive: activeData.length,
-    expiringSoon: activeData.filter(i => getDaysUntilExpiration(i.expirationDate) <= 7).length,
+    expiringSoon: activeData.filter(i => { const days = getDaysUntilExpiration(i.expirationDate); return days >= 0 && days <= 7; }).length,
+    expired: activeData.filter(i => getDaysUntilExpiration(i.expirationDate) < 0).length,
     unpaid: activeData.filter(i => !i.isPaid).length,
     archived: data.filter(i => i.isArchived).length
   };
+
+  const closeDetail = () => { detailDialog.current?.close(); setDetailId(null); };
+  const openDetailAction = (action: () => void) => { closeDetail(); action(); };
+  const resetFilters = () => {
+    setSearch(''); setExpiresSoonFilter(false); setExpiredFilter(false);
+    setUnpaidFilter(false); setFilterStartDate(''); setFilterEndDate(''); setAppFilter('');
+  };
+  const hasFilters = Boolean(search || expiresSoonFilter || expiredFilter || unpaidFilter || filterStartDate || filterEndDate || appFilter);
 
   if (authLoading) {
     return (
@@ -456,33 +507,22 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen p-4 md:p-8 max-w-[1600px] mx-auto">
+    <div className="dashboard-shell min-h-screen p-4 md:p-8 max-w-[1600px] mx-auto">
       {/* Header Area */}
-      <header className="flex flex-col xl:flex-row justify-between items-center gap-4 mb-4 glass-panel p-4">
+      <header className="dashboard-header flex flex-col gap-5 mb-8">
         <div className="flex items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-500 leading-tight">
-              PRO Baza Korisnika
+            <h1 className="text-3xl font-semibold text-white tracking-tight leading-tight">
+              Baza<span className="brand-badge">PRO</span>
             </h1>
-            <p className="text-slate-400 text-sm mt-0.5">Upravljanje pretplatama</p>
+            <p className="text-slate-400 text-sm mt-0.5">Sve pretplate, kontakti i naplata na jednom mjestu.</p>
           </div>
         </div>
         
-        <div className="flex gap-2 flex-wrap items-center justify-center xl:justify-end">
-          <button 
-            onClick={() => setExpiresSoonFilter(!expiresSoonFilter)}
-            className={cn("btn btn-sm", expiresSoonFilter ? "btn-warning" : "btn-ghost border border-slate-700")}
-          >
-            <AlertTriangle size={16} />
-            {expiresSoonFilter ? "Sve" : "Uskoro"}
-          </button>
-          <button 
-            onClick={() => setShowArchived(!showArchived)}
-            className={cn("btn btn-sm", showArchived ? "bg-slate-700 text-white" : "btn-ghost border border-slate-700")}
-          >
-            {showArchived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
-            {showArchived ? "Aktivni" : "Arhiva"}
-          </button>
+        <div className="dashboard-actions flex gap-2 flex-wrap items-center">
+          <button className="btn btn-primary" onClick={() => setNewModalOpen(true)}><Plus size={16}/> Dodaj korisnika</button>
+          <button onClick={() => setNotifyModalOpen(true)} className="btn btn-ghost"><Bell size={16}/> Obavijesti {selectedForNotification.size > 0 && `(${selectedForNotification.size})`}</button>
+          <details className="tools-menu"><summary className="btn btn-ghost"><SettingsIcon size={16}/> Alati</summary><div className="tools-dropdown">
           <button onClick={() => setAIModalOpen(true)} className="btn btn-sm btn-ghost border border-slate-700 text-indigo-400 hover:text-indigo-300">
             <Bot size={16} />
             AI Asistent
@@ -490,10 +530,6 @@ export default function Dashboard() {
           <button onClick={() => setImportModalOpen(true)} className="btn btn-sm bg-slate-800 hover:bg-slate-700 text-slate-200">
             <Upload size={16} />
             Uvoz
-          </button>
-          <button onClick={() => setNotifyModalOpen(true)} className="btn btn-sm bg-slate-700 hover:bg-slate-600 transition-colors">
-            <Bell size={16} />
-            Obavijesti {selectedForNotification.size > 0 && `(${selectedForNotification.size})`}
           </button>
           <button onClick={exportToExcel} className="btn btn-sm bg-emerald-600/90 hover:bg-emerald-500 text-white">
             <Download size={16} />
@@ -507,49 +543,30 @@ export default function Dashboard() {
             <TrendingUp size={16} />
             Analitika
           </button>
-          <button className="btn btn-sm btn-primary" onClick={() => setNewModalOpen(true)}>
-            <Plus size={16} />
-            Novi Korisnik
-          </button>
-          <div className="w-px h-6 bg-slate-700 mx-1"></div>
           <button onClick={() => setSettingsModalOpen(true)} className="btn btn-sm btn-ghost text-slate-300 hover:text-white" title="Postavke">
-            <SettingsIcon size={18} />
+            <SettingsIcon size={18} /> Postavke
           </button>
           <button onClick={handleLogout} className="btn btn-sm btn-ghost text-red-400 hover:text-red-300" title="Odjava">
-            <LogOut size={18} />
+            <LogOut size={18} /> Odjava
           </button>
+          </div></details>
         </div>
       </header>
 
       {/* Main Content Area */}
       <div className="glass-panel p-3 md:p-4 mb-4">
         
-        {/* Dashboard Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-          <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3 flex justify-between items-center hover:border-slate-600 transition-colors">
-            <span className="text-slate-400 text-xs font-medium uppercase tracking-wider">Aktivni</span>
-            <span className="text-xl font-bold text-white">{stats.totalActive}</span>
-          </div>
-          <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 flex justify-between items-center hover:border-amber-500/30 transition-colors">
-            <span className="text-amber-400/80 text-xs font-medium uppercase tracking-wider">Ističe &le; 7 dana</span>
-            <span className="text-xl font-bold text-amber-400">{stats.expiringSoon}</span>
-          </div>
-          <div 
-            onClick={() => setUnpaidFilter(!unpaidFilter)}
-            className={cn(
-              "rounded-lg p-3 flex justify-between items-center transition-colors cursor-pointer",
-              unpaidFilter 
-                ? "bg-red-500/30 border border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.2)]" 
-                : "bg-red-500/10 border border-red-500/20 hover:bg-red-500/20"
-            )}
-          >
-            <span className="text-red-400/80 text-xs font-medium uppercase tracking-wider">Neplaćeno</span>
-            <span className="text-xl font-bold text-red-400">{stats.unpaid}</span>
-          </div>
-          <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3 flex justify-between items-center hover:border-slate-600 transition-colors">
-            <span className="text-slate-400 text-xs font-medium uppercase tracking-wider">Arhiva</span>
-            <span className="text-xl font-bold text-slate-300">{stats.archived}</span>
-          </div>
+        <div className="overview-heading"><div><span className="eyebrow">RADNI PROSTOR</span><h2>Pregled pretplata</h2></div><span className="text-sm text-slate-400">Brzi pristup najvažnijem</span></div>
+        <div className="stats-grid">
+          {[
+            { label: 'Aktivne pretplate', value: stats.totalActive, hint: 'Sve nearhivirane linije', active: !showArchived && !hasFilters, action: () => { resetFilters(); setShowArchived(false); }, tone: 'blue' },
+            { label: 'Istječe u 7 dana', value: stats.expiringSoon, hint: 'Vrijeme za obnovu', active: expiresSoonFilter, action: () => { resetFilters(); setShowArchived(false); setExpiresSoonFilter(true); }, tone: 'amber' },
+            { label: 'Istekle pretplate', value: stats.expired, hint: 'Potrebna provjera', active: expiredFilter, action: () => { resetFilters(); setShowArchived(false); setExpiredFilter(true); }, tone: 'red' },
+            { label: 'Neplaćeno', value: stats.unpaid, hint: 'Otvorene obveze', active: unpaidFilter, action: () => { resetFilters(); setShowArchived(false); setUnpaidFilter(true); }, tone: 'red' },
+            { label: 'Arhiva', value: stats.archived, hint: 'Spremljene pretplate', active: showArchived, action: () => { resetFilters(); setShowArchived(true); }, tone: 'blue' },
+          ].map(card => <button key={card.label} onClick={card.action} aria-pressed={card.active} className={cn('stat-card', card.active && 'stat-card-active')} data-tone={card.tone}>
+            <span>{card.label}</span><strong>{card.value}</strong><small>{card.hint}</small>
+          </button>)}
         </div>
 
         {/* Search Bar and Date Filters */}
@@ -558,7 +575,7 @@ export default function Dashboard() {
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input 
               type="text" 
-              placeholder="Omni-Search: upišite ime, mac adresu, aplikaciju ili status..." 
+              aria-label="Pretraži pretplate" placeholder="Pretraži ime, telefon, aplikaciju, MAC…" 
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-11 pr-10 py-3 glass-input text-base rounded-lg h-full"
@@ -574,7 +591,7 @@ export default function Dashboard() {
             )}
           </div>
           
-          <div className="flex items-center gap-3 bg-slate-800/30 px-4 py-2 rounded-lg border border-slate-700/50">
+          <div className="flex flex-wrap items-center gap-3 bg-slate-800/30 px-4 py-2 rounded-lg border border-slate-700/50">
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-400">Od:</span>
               <input 
@@ -619,29 +636,37 @@ export default function Dashboard() {
           </div>
         </div>
 
+        <div className="filter-toolbar">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm text-slate-400">Aplikacija <select aria-label="Filtriraj po aplikaciji" className="glass-input ml-2" value={appFilter} onChange={e => setAppFilter(e.target.value)}><option value="">Sve aplikacije</option>{Array.from(new Set(data.map(item => item.app).filter(Boolean))).sort().map(app => <option key={app}>{app}</option>)}</select></label>
+            <label className="text-sm text-slate-400">Poredak <select className="glass-input ml-2" value={sortBy} onChange={e => setSortBy(e.target.value)}><option value="expiration">Najbliži istek</option><option value="name">Ime A–Ž</option><option value="newest">Najnovije dodano</option></select></label>
+            {hasFilters && <button className="btn btn-ghost text-sm" onClick={resetFilters}><X size={14}/> Očisti filtre</button>}
+          </div>
+          <span role="status" className="text-sm text-slate-400">{processedData.length} pretplata{selectedForNotification.size > 0 && ` · ${selectedForNotification.size} odabrano`}</span>
+        </div>
         {/* Table Container */}
-        <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/50">
+        <div className="subscription-table overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/50">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-800/80 text-slate-300 text-sm uppercase tracking-wider">
                 <th className="py-3 px-3 font-semibold w-12 text-center">
-                  <input type="checkbox" onChange={(e) => {
+                  <input type="checkbox" aria-label="Odaberi sve prikazane pretplate" checked={processedData.length > 0 && processedData.every(row => selectedForNotification.has(row.id))} onChange={(e) => {
                     if (e.target.checked) setSelectedForNotification(new Set(processedData.map(d => d.id)));
                     else setSelectedForNotification(new Set());
                   }} />
                 </th>
                 <th className="py-3 px-3 font-semibold">Ime i Prezime</th>
                 <th className="py-3 px-3 font-semibold">Aplikacija</th>
-                <th className="py-3 px-3 font-semibold">MAC / Uređaj</th>
+                
                 <th className="py-3 px-3 font-semibold">Istek</th>
                 <th className="py-3 px-3 font-semibold text-center">Plaćeno</th>
-                <th className="py-3 px-3 font-semibold">Kontakt / Email</th>
+                
                 <th className="py-3 px-3 font-semibold text-right">Akcije</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/50 text-sm">
               {processedData.length === 0 ? (
-                <tr><td colSpan={8} className="p-8 text-center text-slate-500">Nema pronađenih linija</td></tr>
+                <tr><td colSpan={6} className="p-8 text-center text-slate-500">Nema pretplata za ovaj prikaz.{hasFilters && <button onClick={resetFilters} className="btn btn-ghost mx-auto mt-3">Očisti filtre</button>}</td></tr>
               ) : (
                 processedData.map((row) => {
                   const daysLeft = getDaysUntilExpiration(row.expirationDate);
@@ -666,7 +691,7 @@ export default function Dashboard() {
                       </td>
                       <td className="py-2 px-3 font-medium">
                         <div className="flex items-center gap-2">
-                          <span className="truncate max-w-[150px] md:max-w-none">{row.name || '-'}</span>
+                          <button className="text-left font-semibold hover:text-blue-300 underline-offset-4 hover:underline" onClick={() => setDetailId(row.id)}>{row.name || 'Bez imena'}</button>
                           {row.note && (
                             <button 
                               onClick={() => setNoteModalContent(row.note)} 
@@ -687,10 +712,6 @@ export default function Dashboard() {
                       </td>
                       <td className="py-2 px-3">
                         <span className="px-1.5 py-0.5 bg-slate-800/80 rounded text-xs text-slate-300 border border-slate-700/50 whitespace-nowrap">{row.app || '-'}</span>
-                      </td>
-                      <td className="py-2 px-3 text-xs text-slate-400 font-mono">
-                        {row.macAddress && <div>{row.macAddress}</div>}
-                        {row.deviceKey && <div className="text-slate-500">Key: {row.deviceKey}</div>}
                       </td>
                       <td className="py-2 px-3">
                         <div className="flex items-center gap-1.5 whitespace-nowrap">
@@ -718,29 +739,7 @@ export default function Dashboard() {
                           {row.isPaid ? 'PLAĆENO' : 'NEPLAĆENO'}
                         </button>
                       </td>
-                      <td className="py-2 px-3 text-xs">
-                        <div className="flex items-center gap-2">
-                          <ContactIcon contact={row.contact} />
-                          <div className="flex flex-col gap-0.5">
-                            {row.phone && row.phone.split(/,|:::|\//).map(p => p.trim()).filter(Boolean).map((phoneNum, idx) => (
-                              <a 
-                                key={idx}
-                                href={generateMessageLink(phoneNum, (settings.quickMessageTemplate || "Poštovani {ime}, podsjećamo vas na vašu pretplatu.").replace(/{ime}/gi, row.name).replace(/{datum}/gi, row.expirationDate || ''), row.contact)}
-                                onClick={() => navigator.clipboard.writeText((settings.quickMessageTemplate || "Poštovani {ime}, podsjećamo vas na vašu pretplatu.").replace(/{ime}/gi, row.name).replace(/{datum}/gi, row.expirationDate || '')).catch(() => {})}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-emerald-400 hover:text-emerald-300 transition-colors flex items-center gap-1 bg-emerald-500/10 px-1.5 py-0.5 rounded-sm w-fit mt-0.5"
-                                title="Pošalji WhatsApp poruku"
-                              >
-                                <MessageSquare size={12} />
-                                <span className="font-medium">{phoneNum}</span>
-                              </a>
-                            ))}
-                            {row.email && <div className="text-slate-400 truncate max-w-[130px]">{row.email}</div>}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-2 px-3 text-right opacity-40 group-hover:opacity-100 transition-opacity">
+                      <td className="py-2 px-3 text-right">
                         <div className="flex items-center justify-end gap-3">
                           <select 
                             className="bg-slate-800/50 text-emerald-400 hover:text-emerald-300 text-sm font-medium border border-emerald-500/30 rounded-md px-2 py-1.5 outline-none cursor-pointer appearance-none text-center"
@@ -767,15 +766,7 @@ export default function Dashboard() {
                               </>
                             )}
                           </select>
-                          <button onClick={() => updateSubscription(row.id, { isArchived: !row.isArchived })} className="text-indigo-400 hover:text-indigo-300 transition-colors p-1" title={row.isArchived ? "Vrati iz arhive" : "Arhiviraj korisnika"}>
-                            {row.isArchived ? <ArchiveRestore size={18} /> : <Archive size={18} />}
-                          </button>
-                          <button onClick={() => setEditModalOpen(row)} className="text-blue-400 hover:text-blue-300 transition-colors p-1" title="Uredi">
-                            <Edit size={18} />
-                          </button>
-                          <button onClick={() => setDeleteModalOpen(row.id)} className="text-red-400 hover:text-red-300 transition-colors p-1" title="Obriši">
-                            <Trash2 size={18} />
-                          </button>
+                          <button onClick={() => setDetailId(row.id)} className="btn btn-ghost text-xs">Detalji</button>
                         </div>
                       </td>
                     </tr>
@@ -786,6 +777,58 @@ export default function Dashboard() {
           </table>
         </div>
       </div>
+
+
+
+      <dialog ref={detailDialog} className="customer-drawer" onCancel={closeDetail} onClose={() => setDetailId(null)} aria-labelledby="customer-title">
+        {detail && <>
+          <div className="drawer-heading"><div><span className="eyebrow">DETALJI PRETPLATE</span><h2 id="customer-title">{detail.name || 'Bez imena'}</h2><p>{detail.app || 'Aplikacija nije unesena'}</p></div><button autoFocus onClick={closeDetail} className="btn btn-ghost" aria-label="Zatvori detalje"><X size={20}/></button></div>
+          <div className="detail-section"><h3>Pretplata</h3><p>Istek: <strong>{parseAnyDate(detail.expirationDate) ? format(parseAnyDate(detail.expirationDate)!, 'dd.MM.yyyy') : 'Nije unesen'}</strong></p><p>{detail.isPaid ? 'Plaćeno' : 'Nije plaćeno'} · {detail.isArchived ? 'Arhivirano' : 'Aktivna evidencija'}</p></div>
+          <div className="detail-section"><h3>Uređaj</h3><dl><dt>MAC adresa</dt><dd>{detail.macAddress || 'Nije unesena'}</dd><dt>Device key</dt><dd>{detail.deviceKey || 'Nije unesen'}</dd></dl></div>
+          <h3 className="px-1 font-semibold">Kontakt</h3>
+                      <div className="detail-section">
+                        <div className="flex items-center gap-2">
+                          <ContactIcon contact={detail.contact} />
+                          <div className="flex flex-col gap-0.5">
+                            {detail.phone && detail.phone.split(/,|:::|\//).map(p => p.trim()).filter(Boolean).map((phoneNum, idx) => (
+                              <a 
+                                key={idx}
+                                href={generateMessageLink(phoneNum, (settings.quickMessageTemplate || "Poštovani {ime}, podsjećamo vas na vašu pretplatu.").replace(/{ime}/gi, detail.name).replace(/{datum}/gi, detail.expirationDate || ''), detail.contact)}
+                                onClick={() => navigator.clipboard.writeText((settings.quickMessageTemplate || "Poštovani {ime}, podsjećamo vas na vašu pretplatu.").replace(/{ime}/gi, detail.name).replace(/{datum}/gi, detail.expirationDate || '')).catch(() => {})}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-emerald-400 hover:text-emerald-300 transition-colors flex items-center gap-1 bg-emerald-500/10 px-1.5 py-0.5 rounded-sm w-fit mt-0.5"
+                                title="Pošalji WhatsApp poruku"
+                              >
+                                <MessageSquare size={12} />
+                                <span className="font-medium">{phoneNum}</span>
+                              </a>
+                            ))}
+                            {detail.email && <div className="text-slate-400 truncate max-w-[130px]">{detail.email}</div>}
+                          </div>
+                        </div>
+                      </div>
+
+          <div className="detail-section"><h3>Napomene</h3><p className="whitespace-pre-wrap">{detail.note || 'Nema napomena.'}</p></div>
+          <div className="detail-section"><h3>Povijest uplata</h3>{detail.payments?.length ? <ul className="space-y-3">{[...detail.payments].sort((a,b) => b.date-a.date).map(payment => <li key={payment.id} className="flex justify-between"><span>{format(new Date(payment.date), 'dd.MM.yyyy')}</span><strong>{payment.amount.toLocaleString('hr-HR', {style:'currency', currency:'EUR'})}</strong></li>)}</ul> : <p>Nema zabilježenih uplata.</p>}</div>
+          <div className="drawer-actions">
+                          <button onClick={() => updateSubscription(detail.id, { isArchived: !detail.isArchived })} className="text-indigo-400 hover:text-indigo-300 transition-colors p-1" title={detail.isArchived ? "Vrati iz arhive" : "Arhiviraj korisnika"}>
+                            {detail.isArchived ? <ArchiveRestore size={18} /> : <Archive size={18} />}
+                          </button>
+                          
+                          <button onClick={() => openDetailAction(() => setNewModalOpen({ name: detail.name, contact: detail.contact, phone: detail.phone || '', email: detail.email || '', tags: detail.tags }))} className="text-emerald-400 hover:text-emerald-300 transition-colors p-1" title="Dodaj uređaj ovom korisniku">
+                            <Plus size={18} /> Dodaj uređaj
+                          </button>
+                          <button onClick={() => openDetailAction(() => setEditModalOpen(detail))} className="text-blue-400 hover:text-blue-300 transition-colors p-1" title="Uredi">
+                            <Edit size={18} /> Uredi
+                          </button>
+                          <button onClick={() => openDetailAction(() => setDeleteModalOpen(detail.id))} className="text-red-400 hover:text-red-300 transition-colors p-1" title="Obriši">
+                            <Trash2 size={18} /> Obriši
+                          </button>
+
+          </div>
+        </>}
+      </dialog>
 
       {/* Delete Confirmation Modal */}
       {isDeleteModalOpen && (
@@ -825,10 +868,11 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Edit/New Modal Component Placeholder - Implementation would follow */}
+      {/* Edit/New Modal Component */}
       {(isEditModalOpen || isNewModalOpen) && (
         <EditModal 
           subscription={isEditModalOpen} 
+          presetData={typeof isNewModalOpen === 'object' ? isNewModalOpen : undefined}
           settings={settings}
           onClose={() => { setEditModalOpen(null); setNewModalOpen(false); }} 
         />
@@ -1064,10 +1108,10 @@ export default function Dashboard() {
 }
 
 // Subcomponent for Edit/New Modal
-function EditModal({ subscription, settings, onClose }: { subscription: Subscription | null, settings: AppSettings, onClose: () => void }) {
+function EditModal({ subscription, settings, onClose, presetData }: { subscription: Subscription | null, settings: AppSettings, onClose: () => void, presetData?: Partial<Subscription> }) {
   const isNew = !subscription;
   const [activeTab, setActiveTab] = useState<'edit' | 'log'>('edit');
-  const [formData, setFormData] = useState<Partial<Subscription>>(subscription || {
+  const [formData, setFormData] = useState<Partial<Subscription>>(subscription || presetData || {
     name: '', app: '', contact: '', macAddress: '', deviceKey: '', expirationDate: '', isPaid: false, email: '', phone: '', note: ''
   });
 
@@ -1736,7 +1780,7 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
             </div>
             <button 
               onClick={() => {
-                setPrices([...prices, { id: crypto.randomUUID(), name: "Novi paket", price: 10, features: ["Značajka 1"] }]);
+                setPrices([...prices, { id: crypto.randomUUID(), name: "Novi paket", price: 10, features: ["Značajka 1"], months: 1 }]);
               }}
               className="mt-4 btn btn-sm btn-ghost text-emerald-400 border border-emerald-400/30 hover:bg-emerald-400/10 w-full"
             >
@@ -1842,7 +1886,7 @@ function AIModal({
   onClose: () => void,
   setSearch: (s: string) => void,
   updateSubscription: (id: string, updates: Partial<Subscription>) => Promise<void>,
-  addSubscription: (sub: Omit<Subscription, "id" | "createdAt">) => Promise<void>,
+  addSubscription: (sub: Omit<Subscription, "id" | "createdAt">) => Promise<any>,
   deleteSubscription: (id: string) => Promise<void>
 }) {
   const [messages, setMessages] = useState<GeminiMessage[]>([

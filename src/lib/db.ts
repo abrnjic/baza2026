@@ -117,24 +117,29 @@ export const subscribeToSubscriptions = (callback: Listener) => {
 };
 
 export const addSubscription = async (sub: Omit<Subscription, 'id'>) => {
+  const cleanSub = Object.fromEntries(Object.entries(sub).filter(([_, v]) => v !== undefined));
+  
   if (isMockEnvironment) {
-    const newSub = { ...sub, id: crypto.randomUUID() };
+    const newSub = { ...cleanSub, id: crypto.randomUUID() } as Subscription;
     const newData = [...(cachedData || []), newSub];
     saveToLocal(newData);
     return newSub;
   } else {
-    await addDoc(collection(db, "subscriptions"), sub);
+    const docRef = await addDoc(collection(db, "subscriptions"), cleanSub);
+    return { ...cleanSub, id: docRef.id } as Subscription;
   }
 };
 
 export const updateSubscription = async (id: string, updates: Partial<Subscription>) => {
+  const cleanUpdates = Object.fromEntries(Object.entries(updates).filter(([_, v]) => v !== undefined));
+  
   if (isMockEnvironment) {
     const newData = (cachedData || []).map(sub => 
-      sub.id === id ? { ...sub, ...updates } : sub
+      sub.id === id ? { ...sub, ...cleanUpdates } : sub
     );
     saveToLocal(newData);
   } else {
-    await updateDoc(doc(db, "subscriptions", id), updates);
+    await updateDoc(doc(db, "subscriptions", id), cleanUpdates);
   }
 };
 

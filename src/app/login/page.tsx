@@ -52,9 +52,9 @@ export default function LoginPage() {
           <div className="w-16 h-16 bg-blue-500/20 rounded-full flex items-center justify-center text-blue-400 mb-4 shadow-[0_0_15px_rgba(59,130,246,0.5)]">
             <Lock size={32} />
           </div>
-          <h1 className="text-2xl font-bold text-white text-center">Sigurna Prijava</h1>
+          <h1 className="text-2xl font-bold text-white text-center">Dobro došli u Baza PRO</h1>
           <p className="text-slate-400 text-center mt-2 text-sm">
-            Ova baza je zaštićena Firebase sigurnosnim pravilima.
+            Prijavite se za upravljanje pretplatama i kontaktima.
           </p>
         </div>
 
@@ -86,8 +86,11 @@ export default function LoginPage() {
 
         <form onSubmit={handleEmailLogin} className="space-y-4">
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Email Adresa</label>
+            <label htmlFor="email" className="block text-sm text-slate-400 mb-1">Email adresa</label>
             <input
+              id="email"
+              autoComplete="email"
+              required
               type="email"
               className="w-full glass-input"
               placeholder="admin@proservers.com"
@@ -96,8 +99,11 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Lozinka</label>
+            <label htmlFor="password" className="block text-sm text-slate-400 mb-1">Lozinka</label>
             <input
+              id="password"
+              autoComplete="current-password"
+              required
               type="password"
               className="w-full glass-input"
               placeholder="••••••••"
