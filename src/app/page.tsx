@@ -546,10 +546,10 @@ export default function Dashboard() {
           <button onClick={() => setSettingsModalOpen(true)} className="btn btn-sm btn-ghost text-slate-300 hover:text-white" title="Postavke">
             <SettingsIcon size={18} /> Postavke
           </button>
-          <button onClick={handleLogout} className="btn btn-sm btn-ghost text-red-400 hover:text-red-300" title="Odjava">
+          </div></details>
+          <button onClick={handleLogout} className="btn btn-ghost sm:ml-auto" title="Odjava">
             <LogOut size={18} /> Odjava
           </button>
-          </div></details>
         </div>
       </header>
 
