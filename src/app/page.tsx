@@ -522,6 +522,14 @@ export default function Dashboard() {
         <div className="dashboard-actions flex gap-2 flex-wrap items-center">
           <button className="btn btn-primary" onClick={() => setNewModalOpen(true)}><Plus size={16}/> Dodaj korisnika</button>
           <button onClick={() => setNotifyModalOpen(true)} className="btn btn-ghost"><Bell size={16}/> Obavijesti {selectedForNotification.size > 0 && `(${selectedForNotification.size})`}</button>
+          <button
+            onClick={() => { resetFilters(); setSelectedForNotification(new Set()); setShowArchived(!showArchived); }}
+            className="btn btn-ghost"
+            aria-pressed={showArchived}
+          >
+            {showArchived ? <ArchiveRestore size={16}/> : <Archive size={16}/>}
+            {showArchived ? 'Natrag na aktivne' : `Arhiva (${stats.archived})`}
+          </button>
           <details className="tools-menu"><summary className="btn btn-ghost"><SettingsIcon size={16}/> Alati</summary><div className="tools-dropdown">
           <button onClick={() => setAIModalOpen(true)} className="btn btn-sm btn-ghost border border-slate-700 text-indigo-400 hover:text-indigo-300">
             <Bot size={16} />
@@ -556,7 +564,7 @@ export default function Dashboard() {
       {/* Main Content Area */}
       <div className="glass-panel p-3 md:p-4 mb-4">
         
-        <div className="overview-heading"><div><span className="eyebrow">RADNI PROSTOR</span><h2>Pregled pretplata</h2></div><span className="text-sm text-slate-400">Brzi pristup najvažnijem</span></div>
+        <div className="overview-heading"><div><span className="eyebrow">RADNI PROSTOR</span><h2>{showArchived ? 'Arhivirane pretplate' : 'Pregled pretplata'}</h2></div><span className="text-sm text-slate-400">Brzi pristup najvažnijem</span></div>
         <div className="stats-grid">
           {[
             { label: 'Aktivne pretplate', value: stats.totalActive, hint: 'Sve nearhivirane linije', active: !showArchived && !hasFilters, action: () => { resetFilters(); setShowArchived(false); }, tone: 'blue' },
@@ -814,6 +822,7 @@ export default function Dashboard() {
           <div className="drawer-actions">
                           <button onClick={() => updateSubscription(detail.id, { isArchived: !detail.isArchived })} className="text-indigo-400 hover:text-indigo-300 transition-colors p-1" title={detail.isArchived ? "Vrati iz arhive" : "Arhiviraj korisnika"}>
                             {detail.isArchived ? <ArchiveRestore size={18} /> : <Archive size={18} />}
+                            {detail.isArchived ? 'Vrati iz arhive' : 'Arhiviraj'}
                           </button>
                           
                           <button onClick={() => openDetailAction(() => setNewModalOpen({ name: detail.name, contact: detail.contact, phone: detail.phone || '', email: detail.email || '', tags: detail.tags }))} className="text-emerald-400 hover:text-emerald-300 transition-colors p-1" title="Dodaj uređaj ovom korisniku">
