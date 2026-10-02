@@ -204,6 +204,7 @@ export interface MessageTemplate {
 
 export interface AppSettings {
   apps: string[];
+  appNames?: Record<string, string>;
   contacts: string[];
   geminiApiKey?: string;
   prices?: PricePackage[];
