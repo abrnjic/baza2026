@@ -13,6 +13,22 @@ import { cn } from '@/lib/utils';
 import * as xlsx from 'xlsx';
 import { callGemini, callGeminiChat, GeminiMessage, GeminiTool } from '@/lib/gemini';
 
+const appNameKey = (name: string) => name.normalize('NFC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('hr');
+
+const formatAppName = (name: string) => appNameKey(name)
+  .replace(/(^|[\s-])([\p{L}\p{N}])/gu, (_, separator: string, first: string) => separator + first.toLocaleUpperCase('hr'));
+
+// Keep stored values intact so existing subscriptions retain their app selection.
+const sortedUniqueApps = (names: string[]) => {
+  const seen = new Set<string>();
+  return names.filter(name => {
+    const key = appNameKey(name);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => appNameKey(a).localeCompare(appNameKey(b), 'hr', { numeric: true }));
+};
+
 const ContactIcon = ({ contact }: { contact: string }) => {
   const c = contact?.toUpperCase() || '';
   if (c.includes('WHATS APP') || c.includes('WHATSAPP')) return <FaWhatsapp className="text-[#25D366] shrink-0" size={16} title={contact} />;
@@ -297,7 +313,7 @@ export default function Dashboard() {
     }
 
     if (expiredFilter) result = result.filter(item => getDaysUntilExpiration(item.expirationDate) < 0);
-    if (appFilter) result = result.filter(item => item.app === appFilter);
+    if (appFilter) result = result.filter(item => appNameKey(item.app || '') === appNameKey(appFilter));
 
     if (unpaidFilter) {
       result = result.filter(item => !item.isPaid);
@@ -646,7 +662,7 @@ export default function Dashboard() {
 
         <div className="filter-toolbar">
           <div className="flex flex-wrap items-center gap-3">
-            <label className="text-sm text-slate-400">Aplikacija <select aria-label="Filtriraj po aplikaciji" className="glass-input ml-2" value={appFilter} onChange={e => setAppFilter(e.target.value)}><option value="">Sve aplikacije</option>{Array.from(new Set(data.map(item => item.app).filter(Boolean))).sort().map(app => <option key={app}>{app}</option>)}</select></label>
+            <label className="text-sm text-slate-400">Aplikacija <select aria-label="Filtriraj po aplikaciji" className="glass-input ml-2" value={appFilter} onChange={e => setAppFilter(e.target.value)}><option value="">Sve aplikacije</option>{sortedUniqueApps(data.map(item => item.app).filter(Boolean)).map(app => <option key={app} value={app}>{formatAppName(app)}</option>)}</select></label>
             <label className="text-sm text-slate-400">Poredak <select className="glass-input ml-2" value={sortBy} onChange={e => setSortBy(e.target.value)}><option value="expiration">Najbliži istek</option><option value="name">Ime A–Ž</option><option value="newest">Najnovije dodano</option></select></label>
             {hasFilters && <button className="btn btn-ghost text-sm" onClick={resetFilters}><X size={14}/> Očisti filtre</button>}
           </div>
@@ -719,7 +735,7 @@ export default function Dashboard() {
                         )}
                       </td>
                       <td className="py-2 px-3">
-                        <span className="px-1.5 py-0.5 bg-slate-800/80 rounded text-xs text-slate-300 border border-slate-700/50 whitespace-nowrap">{row.app || '-'}</span>
+                        <span className="px-1.5 py-0.5 bg-slate-800/80 rounded text-xs text-slate-300 border border-slate-700/50 whitespace-nowrap">{formatAppName(row.app || '') || '-'}</span>
                       </td>
                       <td className="py-2 px-3">
                         <div className="flex items-center gap-1.5 whitespace-nowrap">
@@ -790,7 +806,7 @@ export default function Dashboard() {
 
       <dialog ref={detailDialog} className="customer-drawer" onCancel={closeDetail} onClose={() => setDetailId(null)} aria-labelledby="customer-title">
         {detail && <>
-          <div className="drawer-heading"><div><span className="eyebrow">DETALJI PRETPLATE</span><h2 id="customer-title">{detail.name || 'Bez imena'}</h2><p>{detail.app || 'Aplikacija nije unesena'}</p></div><button autoFocus onClick={closeDetail} className="btn btn-ghost" aria-label="Zatvori detalje"><X size={20}/></button></div>
+          <div className="drawer-heading"><div><span className="eyebrow">DETALJI PRETPLATE</span><h2 id="customer-title">{detail.name || 'Bez imena'}</h2><p>{formatAppName(detail.app || '') || 'Aplikacija nije unesena'}</p></div><button autoFocus onClick={closeDetail} className="btn btn-ghost" aria-label="Zatvori detalje"><X size={20}/></button></div>
           <div className="detail-section"><h3>Pretplata</h3><p>Istek: <strong>{parseAnyDate(detail.expirationDate) ? format(parseAnyDate(detail.expirationDate)!, 'dd.MM.yyyy') : 'Nije unesen'}</strong></p><p>{detail.isPaid ? 'Plaćeno' : 'Nije plaćeno'} · {detail.isArchived ? 'Arhivirano' : 'Aktivna evidencija'}</p></div>
           <div className="detail-section"><h3>Uređaj</h3><dl><dt>MAC adresa</dt><dd>{detail.macAddress || 'Nije unesena'}</dd><dt>Device key</dt><dd>{detail.deviceKey || 'Nije unesen'}</dd></dl></div>
           <h3 className="px-1 font-semibold">Kontakt</h3>
@@ -985,7 +1001,7 @@ export default function Dashboard() {
                               <span className="text-xs font-bold bg-emerald-500 text-white px-2 py-0.5 rounded uppercase mr-2">NOVI KORISNIK</span>
                               <span className="font-medium text-slate-200">{item.updated.name}</span>
                               <div className="text-sm text-slate-400 mt-2">
-                                MAC: {item.updated.macAddress || '-'} | Aplikacija: {item.updated.app || '-'} | Istek: {item.updated.expirationDate || '-'}
+                                MAC: {item.updated.macAddress || '-'} | Aplikacija: {formatAppName(item.updated.app || '') || '-'} | Istek: {item.updated.expirationDate || '-'}
                               </div>
                             </div>
                           ) : (
@@ -1170,7 +1186,7 @@ function EditModal({ subscription, settings, onClose, presetData }: { subscripti
               <label className="block text-sm text-slate-400 mb-1">Aplikacija</label>
               <select className="w-full glass-input" value={formData.app} onChange={e => setFormData({...formData, app: e.target.value})}>
                 <option value="">Odaberi aplikaciju</option>
-                {settings.apps.map(a => <option key={a} value={a}>{a}</option>)}
+                {sortedUniqueApps([formData.app || '', ...settings.apps]).map(a => <option key={a} value={a}>{formatAppName(a)}</option>)}
               </select>
             </div>
             <div>
@@ -1403,6 +1419,9 @@ function AnalyticsModal({ data, onClose }: { data: Subscription[], onClose: () =
 function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Subscription[], settings: AppSettings, onClose: () => void, onOpenManualSync: () => void }) {
   const [apps, setApps] = useState<string[]>(settings.apps || []);
   const [newApp, setNewApp] = useState("");
+  const [appError, setAppError] = useState("");
+  const visibleApps = sortedUniqueApps(apps);
+  const duplicateAppCount = apps.filter(app => appNameKey(app)).length - visibleApps.length;
   const [contacts, setContacts] = useState<string[]>(settings.contacts || []);
   const [newContact, setNewContact] = useState("");
   const [geminiApiKey, setGeminiApiKey] = useState(settings.geminiApiKey || "");
@@ -1425,7 +1444,7 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
   const handleSave = async () => {
     setSaving(true);
     await updateSettings({ 
-      apps, contacts, geminiApiKey, prices, availableTags: tags, messageTemplates: templates,
+      apps: sortedUniqueApps(apps), contacts, geminiApiKey, prices, availableTags: tags, messageTemplates: templates,
       cjenikTitle, cjenikSubtitle, cjenikNotes, quickMessageTemplate
     });
     setSaving(false);
@@ -1477,9 +1496,15 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
   };
 
   const addItem = (type: 'apps' | 'contacts' | 'tags') => {
-    if (type === 'apps' && newApp.trim() && !apps.includes(newApp.trim().toUpperCase())) {
-      setApps([...apps, newApp.trim().toUpperCase()]);
+    if (type === 'apps') {
+      if (!newApp.trim()) return;
+      if (apps.some(app => appNameKey(app) === appNameKey(newApp))) {
+        setAppError(`Aplikacija ${formatAppName(newApp)} već postoji na popisu.`);
+        return;
+      }
+      setApps(sortedUniqueApps([...apps, formatAppName(newApp)]));
       setNewApp("");
+      setAppError("");
     } else if (type === 'contacts' && newContact.trim() && !contacts.includes(newContact.trim().toUpperCase())) {
       setContacts([...contacts, newContact.trim().toUpperCase()]);
       setNewContact("");
@@ -1491,7 +1516,7 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
 
   const removeItem = (type: 'apps' | 'contacts' | 'tags', item: string) => {
     if (type === 'apps') {
-      setApps(apps.filter(a => a !== item));
+      setApps(apps.filter(a => appNameKey(a) !== appNameKey(item)));
     } else if (type === 'contacts') {
       setContacts(contacts.filter(c => c !== item));
     } else if (type === 'tags') {
@@ -1525,23 +1550,27 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           {/* Apps Editor */}
           <div className="bg-slate-900/50 rounded-xl p-4 border border-slate-800">
-            <h3 className="text-lg font-semibold text-slate-200 mb-4">Padajući izbornik: Aplikacije</h3>
+            <h3 className="text-lg font-semibold text-slate-200 mb-2">Padajući izbornik: Aplikacije</h3>
+            <p className="text-xs text-slate-400 mb-4">{visibleApps.length} aplikacija · Abecedni poredak</p>
             <div className="flex gap-2 mb-4">
               <input 
                 type="text" 
-                className="glass-input flex-1 uppercase" 
+                className="glass-input flex-1"
                 placeholder="Unesi novu aplikaciju..." 
+                aria-label="Naziv nove aplikacije"
                 value={newApp}
-                onChange={(e) => setNewApp(e.target.value)}
+                onChange={(e) => { setNewApp(e.target.value); setAppError(""); }}
                 onKeyDown={(e) => e.key === 'Enter' && addItem('apps')}
               />
-              <button onClick={() => addItem('apps')} className="btn bg-indigo-600 hover:bg-indigo-500 text-white px-3"><Plus size={20}/></button>
+              <button aria-label="Dodaj aplikaciju" onClick={() => addItem('apps')} className="btn bg-indigo-600 hover:bg-indigo-500 text-white px-3"><Plus size={20}/></button>
             </div>
-            <div className="max-h-64 overflow-y-auto pr-2 space-y-2">
-              {apps.map(app => (
+            {appError && <p role="alert" className="text-sm text-amber-400 mb-3">{appError}</p>}
+            <p className="text-xs text-slate-400 mb-3">{duplicateAppCount > 0 ? `Pronađeno ponavljanja: ${duplicateAppCount}. Na popisu se svaki naziv prikazuje jednom; spremanjem postavki uklanjaju se ponavljanja.` : 'Nema ponovljenih naziva aplikacija.'}</p>
+            <div aria-label="Popis aplikacija" className="max-h-64 overflow-y-auto pr-2 space-y-2">
+              {visibleApps.map(app => (
                 <div key={app} className="flex justify-between items-center bg-slate-800/50 p-2 px-3 rounded-lg border border-slate-700/50">
-                  <span className="text-slate-300 text-sm font-medium">{app}</span>
-                  <button onClick={() => removeItem('apps', app)} className="text-slate-500 hover:text-red-400 transition-colors">
+                  <span className="text-slate-300 text-sm font-medium">{formatAppName(app)}</span>
+                  <button aria-label={`Ukloni aplikaciju ${formatAppName(app)}`} onClick={() => removeItem('apps', app)} className="text-slate-500 hover:text-red-400 transition-colors">
                     <Trash2 size={16} />
                   </button>
                 </div>
@@ -2104,7 +2133,7 @@ Važna pravila:
         <div className="flex gap-2">
           <input 
             type="text" 
-            className="glass-input flex-1" 
+            className="glass-input flex-1"
             placeholder="Pitajte me o vašim korisnicima..." 
             value={input}
             onChange={(e) => setInput(e.target.value)}
