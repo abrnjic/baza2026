@@ -13,7 +13,11 @@ import { cn } from '@/lib/utils';
 import * as xlsx from 'xlsx';
 import { callGemini, callGeminiChat, GeminiMessage, GeminiTool } from '@/lib/gemini';
 
-const appNameKey = (name: string) => name.normalize('NFC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('hr');
+const appNameKey = (name: string) => {
+  const key = name.normalize('NFC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('hr');
+  // The old name remains compatible with existing subscription records.
+  return key === 'ibo bob player' ? 'bob player' : key;
+};
 
 const formatAppName = (name: string) => appNameKey(name)
   .replace(/(^|[\s-])([\p{L}\p{N}])/gu, (_, separator: string, first: string) => separator + first.toLocaleUpperCase('hr'));
