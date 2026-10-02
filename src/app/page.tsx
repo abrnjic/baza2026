@@ -19,18 +19,22 @@ const appNameKey = (name: string) => {
   return key === 'ibo bob player' ? 'bob player' : key;
 };
 
-const formatAppName = (name: string) => appNameKey(name)
-  .replace(/(^|[\s-])([\p{L}\p{N}])/gu, (_, separator: string, first: string) => separator + first.toLocaleUpperCase('hr'));
+const formatAppName = (name: string, appNames: Record<string, string> = {}) => {
+  const key = appNameKey(name);
+  const label = Object.prototype.hasOwnProperty.call(appNames, key) ? appNames[key] : name;
+  return appNameKey(label || name)
+    .replace(/(^|[\s-])([\p{L}\p{N}])/gu, (_, separator: string, first: string) => separator + first.toLocaleUpperCase('hr'));
+};
 
 // Keep stored values intact so existing subscriptions retain their app selection.
-const sortedUniqueApps = (names: string[]) => {
+const sortedUniqueApps = (names: string[], appNames: Record<string, string> = {}) => {
   const seen = new Set<string>();
   return names.filter(name => {
-    const key = appNameKey(name);
+    const key = appNameKey(formatAppName(name, appNames));
     if (!key || seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).sort((a, b) => appNameKey(a).localeCompare(appNameKey(b), 'hr', { numeric: true }));
+  }).sort((a, b) => formatAppName(a, appNames).localeCompare(formatAppName(b, appNames), 'hr', { numeric: true }));
 };
 
 const ContactIcon = ({ contact }: { contact: string }) => {
@@ -300,6 +304,7 @@ export default function Dashboard() {
         (item.name?.toLowerCase() || '').includes(q) ||
         (item.macAddress?.toLowerCase() || '').includes(q) ||
         (item.app?.toLowerCase() || '').includes(q) ||
+        formatAppName(item.app || '', settings.appNames).toLocaleLowerCase('hr').includes(q) ||
         (item.contact?.toLowerCase() || '').includes(q) ||
         (item.email?.toLowerCase() || '').includes(q) ||
         (item.phone?.toLowerCase() || '').includes(q) ||
@@ -317,7 +322,7 @@ export default function Dashboard() {
     }
 
     if (expiredFilter) result = result.filter(item => getDaysUntilExpiration(item.expirationDate) < 0);
-    if (appFilter) result = result.filter(item => appNameKey(item.app || '') === appNameKey(appFilter));
+    if (appFilter) result = result.filter(item => appNameKey(formatAppName(item.app || '', settings.appNames)) === appNameKey(formatAppName(appFilter, settings.appNames)));
 
     if (unpaidFilter) {
       result = result.filter(item => !item.isPaid);
@@ -359,7 +364,7 @@ export default function Dashboard() {
     });
 
     return result;
-  }, [data, search, expiresSoonFilter, filterStartDate, filterEndDate, showArchived, unpaidFilter, expiredFilter, appFilter, sortBy]);
+  }, [data, search, expiresSoonFilter, filterStartDate, filterEndDate, showArchived, unpaidFilter, expiredFilter, appFilter, sortBy, settings.appNames]);
 
   const groupedData = useMemo(() => {
     const map = new Map<string, {
@@ -666,7 +671,7 @@ export default function Dashboard() {
 
         <div className="filter-toolbar">
           <div className="flex flex-wrap items-center gap-3">
-            <label className="text-sm text-slate-400">Aplikacija <select aria-label="Filtriraj po aplikaciji" className="glass-input ml-2" value={appFilter} onChange={e => setAppFilter(e.target.value)}><option value="">Sve aplikacije</option>{sortedUniqueApps(data.map(item => item.app).filter(Boolean)).map(app => <option key={app} value={app}>{formatAppName(app)}</option>)}</select></label>
+            <label className="text-sm text-slate-400">Aplikacija <select aria-label="Filtriraj po aplikaciji" className="glass-input ml-2" value={appFilter} onChange={e => setAppFilter(e.target.value)}><option value="">Sve aplikacije</option>{sortedUniqueApps(data.map(item => item.app).filter(Boolean), settings.appNames).map(app => <option key={app} value={app}>{formatAppName(app, settings.appNames)}</option>)}</select></label>
             <label className="text-sm text-slate-400">Poredak <select className="glass-input ml-2" value={sortBy} onChange={e => setSortBy(e.target.value)}><option value="expiration">Najbliži istek</option><option value="name">Ime A–Ž</option><option value="newest">Najnovije dodano</option></select></label>
             {hasFilters && <button className="btn btn-ghost text-sm" onClick={resetFilters}><X size={14}/> Očisti filtre</button>}
           </div>
@@ -739,7 +744,7 @@ export default function Dashboard() {
                         )}
                       </td>
                       <td className="py-2 px-3">
-                        <span className="px-1.5 py-0.5 bg-slate-800/80 rounded text-xs text-slate-300 border border-slate-700/50 whitespace-nowrap">{formatAppName(row.app || '') || '-'}</span>
+                        <span className="px-1.5 py-0.5 bg-slate-800/80 rounded text-xs text-slate-300 border border-slate-700/50 whitespace-nowrap">{formatAppName(row.app || '', settings.appNames) || '-'}</span>
                       </td>
                       <td className="py-2 px-3">
                         <div className="flex items-center gap-1.5 whitespace-nowrap">
@@ -810,7 +815,7 @@ export default function Dashboard() {
 
       <dialog ref={detailDialog} className="customer-drawer" onCancel={closeDetail} onClose={() => setDetailId(null)} aria-labelledby="customer-title">
         {detail && <>
-          <div className="drawer-heading"><div><span className="eyebrow">DETALJI PRETPLATE</span><h2 id="customer-title">{detail.name || 'Bez imena'}</h2><p>{formatAppName(detail.app || '') || 'Aplikacija nije unesena'}</p></div><button autoFocus onClick={closeDetail} className="btn btn-ghost" aria-label="Zatvori detalje"><X size={20}/></button></div>
+          <div className="drawer-heading"><div><span className="eyebrow">DETALJI PRETPLATE</span><h2 id="customer-title">{detail.name || 'Bez imena'}</h2><p>{formatAppName(detail.app || '', settings.appNames) || 'Aplikacija nije unesena'}</p></div><button autoFocus onClick={closeDetail} className="btn btn-ghost" aria-label="Zatvori detalje"><X size={20}/></button></div>
           <div className="detail-section"><h3>Pretplata</h3><p>Istek: <strong>{parseAnyDate(detail.expirationDate) ? format(parseAnyDate(detail.expirationDate)!, 'dd.MM.yyyy') : 'Nije unesen'}</strong></p><p>{detail.isPaid ? 'Plaćeno' : 'Nije plaćeno'} · {detail.isArchived ? 'Arhivirano' : 'Aktivna evidencija'}</p></div>
           <div className="detail-section"><h3>Uređaj</h3><dl><dt>MAC adresa</dt><dd>{detail.macAddress || 'Nije unesena'}</dd><dt>Device key</dt><dd>{detail.deviceKey || 'Nije unesen'}</dd></dl></div>
           <h3 className="px-1 font-semibold">Kontakt</h3>
@@ -1005,7 +1010,7 @@ export default function Dashboard() {
                               <span className="text-xs font-bold bg-emerald-500 text-white px-2 py-0.5 rounded uppercase mr-2">NOVI KORISNIK</span>
                               <span className="font-medium text-slate-200">{item.updated.name}</span>
                               <div className="text-sm text-slate-400 mt-2">
-                                MAC: {item.updated.macAddress || '-'} | Aplikacija: {formatAppName(item.updated.app || '') || '-'} | Istek: {item.updated.expirationDate || '-'}
+                                MAC: {item.updated.macAddress || '-'} | Aplikacija: {formatAppName(item.updated.app || '', settings.appNames) || '-'} | Istek: {item.updated.expirationDate || '-'}
                               </div>
                             </div>
                           ) : (
@@ -1190,7 +1195,7 @@ function EditModal({ subscription, settings, onClose, presetData }: { subscripti
               <label className="block text-sm text-slate-400 mb-1">Aplikacija</label>
               <select className="w-full glass-input" value={formData.app} onChange={e => setFormData({...formData, app: e.target.value})}>
                 <option value="">Odaberi aplikaciju</option>
-                {sortedUniqueApps([formData.app || '', ...settings.apps]).map(a => <option key={a} value={a}>{formatAppName(a)}</option>)}
+                {sortedUniqueApps([formData.app || '', ...settings.apps], settings.appNames).map(a => <option key={a} value={a}>{formatAppName(a, settings.appNames)}</option>)}
               </select>
             </div>
             <div>
@@ -1424,7 +1429,10 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
   const [apps, setApps] = useState<string[]>(settings.apps || []);
   const [newApp, setNewApp] = useState("");
   const [appError, setAppError] = useState("");
-  const visibleApps = sortedUniqueApps(apps);
+  const [appNames, setAppNames] = useState<Record<string, string>>(settings.appNames || {});
+  const [editingApp, setEditingApp] = useState<string | null>(null);
+  const [editedAppName, setEditedAppName] = useState("");
+  const visibleApps = sortedUniqueApps(apps, appNames);
   const duplicateAppCount = apps.filter(app => appNameKey(app)).length - visibleApps.length;
   const [contacts, setContacts] = useState<string[]>(settings.contacts || []);
   const [newContact, setNewContact] = useState("");
@@ -1446,13 +1454,41 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
   const [activeTab, setActiveTab] = useState<'general' | 'prices' | 'messages' | 'tags'>('general');
 
   const handleSave = async () => {
+    if (editingApp !== null) {
+      setAppError('Najprije potvrdi izmijenjeni naziv ili odustani od uređivanja.');
+      return;
+    }
     setSaving(true);
-    await updateSettings({ 
-      apps: sortedUniqueApps(apps), contacts, geminiApiKey, prices, availableTags: tags, messageTemplates: templates,
-      cjenikTitle, cjenikSubtitle, cjenikNotes, quickMessageTemplate
-    });
-    setSaving(false);
-    onClose();
+    try {
+      await updateSettings({
+        apps: sortedUniqueApps(apps, appNames), appNames, contacts, geminiApiKey, prices, availableTags: tags, messageTemplates: templates,
+        cjenikTitle, cjenikSubtitle, cjenikNotes, quickMessageTemplate
+      });
+      onClose();
+    } catch (error) {
+      console.error('Spremanje postavki nije uspjelo', error);
+      setAppError('Postavke nisu spremljene. Pokušaj ponovno.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const confirmAppName = () => {
+    if (editingApp === null) return;
+    const name = formatAppName(editedAppName);
+    if (!name) {
+      setAppError('Unesi naziv aplikacije.');
+      return;
+    }
+    if (apps.some(app => appNameKey(app) !== appNameKey(editingApp) &&
+      appNameKey(formatAppName(app, appNames)) === appNameKey(name))) {
+      setAppError(`Aplikacija ${name} već postoji na popisu.`);
+      return;
+    }
+    // Rename the label only; subscriptions keep their original app values.
+    setAppNames({ ...appNames, [appNameKey(editingApp)]: name });
+    setEditingApp(null);
+    setAppError('');
   };
 
   const handleBackup = () => {
@@ -1502,11 +1538,11 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
   const addItem = (type: 'apps' | 'contacts' | 'tags') => {
     if (type === 'apps') {
       if (!newApp.trim()) return;
-      if (apps.some(app => appNameKey(app) === appNameKey(newApp))) {
+      if (apps.some(app => appNameKey(app) === appNameKey(newApp) || appNameKey(formatAppName(app, appNames)) === appNameKey(newApp))) {
         setAppError(`Aplikacija ${formatAppName(newApp)} već postoji na popisu.`);
         return;
       }
-      setApps(sortedUniqueApps([...apps, formatAppName(newApp)]));
+      setApps(sortedUniqueApps([...apps, formatAppName(newApp)], appNames));
       setNewApp("");
       setAppError("");
     } else if (type === 'contacts' && newContact.trim() && !contacts.includes(newContact.trim().toUpperCase())) {
@@ -1556,6 +1592,7 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
           <div className="bg-slate-900/50 rounded-xl p-4 border border-slate-800">
             <h3 className="text-lg font-semibold text-slate-200 mb-2">Padajući izbornik: Aplikacije</h3>
             <p className="text-xs text-slate-400 mb-4">{visibleApps.length} aplikacija · Abecedni poredak</p>
+            <p className="text-xs text-slate-400 mb-3">Nazive možeš urediti gumbom Uredi. Promjene se spremaju gumbom Spremi Postavke.</p>
             <div className="flex gap-2 mb-4">
               <input 
                 type="text" 
@@ -1572,11 +1609,22 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
             <p className="text-xs text-slate-400 mb-3">{duplicateAppCount > 0 ? `Pronađeno ponavljanja: ${duplicateAppCount}. Na popisu se svaki naziv prikazuje jednom; spremanjem postavki uklanjaju se ponavljanja.` : 'Nema ponovljenih naziva aplikacija.'}</p>
             <div aria-label="Popis aplikacija" className="max-h-64 overflow-y-auto pr-2 space-y-2">
               {visibleApps.map(app => (
-                <div key={app} className="flex justify-between items-center bg-slate-800/50 p-2 px-3 rounded-lg border border-slate-700/50">
-                  <span className="text-slate-300 text-sm font-medium">{formatAppName(app)}</span>
-                  <button aria-label={`Ukloni aplikaciju ${formatAppName(app)}`} onClick={() => removeItem('apps', app)} className="text-slate-500 hover:text-red-400 transition-colors">
+                <div key={app} className="flex flex-wrap gap-2 justify-between items-center bg-slate-800/50 p-2 px-3 rounded-lg border border-slate-700/50">
+                  {editingApp === app ? <>
+                    <input autoFocus aria-label="Uredi naziv aplikacije" className="glass-input w-full min-w-0" value={editedAppName}
+                      onChange={e => { setEditedAppName(e.target.value); setAppError(''); }}
+                      onKeyDown={e => { if (e.key === 'Enter') confirmAppName(); if (e.key === 'Escape') { setEditingApp(null); setAppError(''); } }} />
+                    <div className="flex gap-2">
+                      <button onClick={confirmAppName} className="text-sm text-emerald-400 hover:text-emerald-300">Potvrdi naziv</button>
+                      <button onClick={() => { setEditingApp(null); setAppError(''); }} className="text-sm text-slate-400 hover:text-white">Odustani od uređivanja</button>
+                    </div>
+                  </> : <>
+                  <span className="text-slate-300 text-sm font-medium break-words min-w-0 flex-1">{formatAppName(app, appNames)}</span>
+                  <button disabled={editingApp !== null || saving} aria-label={`Uredi aplikaciju ${formatAppName(app, appNames)}`} onClick={() => { setEditingApp(app); setEditedAppName(formatAppName(app, appNames)); setAppError(''); }} className="text-xs text-indigo-400 hover:text-indigo-300 disabled:opacity-40">Uredi</button>
+                  <button disabled={editingApp !== null || saving} aria-label={`Ukloni aplikaciju ${formatAppName(app, appNames)}`} onClick={() => removeItem('apps', app)} className="text-slate-500 hover:text-red-400 transition-colors disabled:opacity-40">
                     <Trash2 size={16} />
                   </button>
+                  </>}
                 </div>
               ))}
             </div>
