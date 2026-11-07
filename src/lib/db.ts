@@ -1,5 +1,6 @@
 import { db, isMockEnvironment } from './firebase';
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, setDoc, writeBatch } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, setDoc, writeBatch, runTransaction } from 'firebase/firestore';
+import type { ReminderChannel } from './renewals';
 
 export interface Payment {
   id: string;
@@ -32,6 +33,7 @@ export interface Subscription {
   tags?: string[];
   payments?: Payment[];
   logs?: ActivityLog[];
+  renewalReminders?: Record<string, { confirmedAt: number; channel: ReminderChannel }>;
 }
 
 // Local Storage Fallback & Mock Event Emitter for Real-Time feel
@@ -55,31 +57,7 @@ const saveToLocal = (data: Subscription[]) => {
 const loadInitialData = async (): Promise<Subscription[]> => {
   try {
     const local = localStorage.getItem(DB_KEY);
-    if (local) {
-      return JSON.parse(local);
-    }
-    const res = await fetch('/baza.json');
-    if (!res.ok) return [];
-    const jsonData = await res.json();
-    const initialData: Subscription[] = [];
-    if (jsonData['PROSERVERS']) {
-      jsonData['PROSERVERS'].forEach((row: any) => {
-        initialData.push({
-          id: crypto.randomUUID(),
-          name: row['IME I PREZIME'] || '',
-          contact: row['KONTAKT'] || '',
-          app: row['APLIKACIJE'] || '',
-          macAddress: row['MAC ADRESA'] || '',
-          deviceKey: row['DEVICE KEY'] || '',
-          note: row['NAPOMENA'] || '',
-          expirationDate: row['ISTEK'] && row['ISTEK'] !== 'NaT' ? row['ISTEK'] : '',
-          isPaid: false,
-          createdAt: Date.now()
-        });
-      });
-    }
-    saveToLocal(initialData);
-    return initialData;
+    return local ? JSON.parse(local) : [];
   } catch (error) {
     console.error("Failed to load initial data", error);
     return [];
@@ -152,6 +130,32 @@ export const deleteSubscription = async (id: string) => {
   }
 };
 
+export async function confirmRenewalReminder(
+  lines: { id: string; date: string }[],
+  channel: ReminderChannel,
+) {
+  const confirmation = { confirmedAt: Date.now(), channel };
+  if (isMockEnvironment) {
+    const datesById = new Map(lines.map(line => [line.id, line.date]));
+    saveToLocal((cachedData || []).map(subscription => {
+      const date = datesById.get(subscription.id);
+      if (!date || subscription.renewalReminders?.[date]) return subscription;
+      return { ...subscription, renewalReminders: { ...subscription.renewalReminders, [date]: confirmation } };
+    }));
+    return;
+  }
+
+  await runTransaction(db, async transaction => {
+    const snapshots = await Promise.all(lines.map(line => transaction.get(doc(db, 'subscriptions', line.id))));
+    snapshots.forEach((snapshot, index) => {
+      const date = lines[index].date;
+      if (snapshot.exists() && !snapshot.data().renewalReminders?.[date]) {
+        transaction.update(snapshot.ref, `renewalReminders.${date}`, confirmation);
+      }
+    });
+  });
+}
+
 export const batchSyncSubscriptions = async (updates: {id: string, data: Partial<Subscription>}[], additions: Subscription[]) => {
   if (isMockEnvironment) return;
   const batch = writeBatch(db);
@@ -214,6 +218,7 @@ export interface AppSettings {
   cjenikSubtitle?: string;
   cjenikNotes?: string[];
   quickMessageTemplate?: string;
+  renewalMessageTemplate?: string;
 }
 
 export const subscribeToSettings = (callback: (settings: AppSettings) => void) => {

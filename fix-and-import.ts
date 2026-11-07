@@ -11,7 +11,7 @@ interface CSVContact {
 
 async function run() {
   console.log('Reading baza.json...');
-  const bazaRaw = fs.readFileSync('public/baza.json', 'utf8');
+  const bazaRaw = fs.readFileSync('private/baza.json', 'utf8');
   const baza = JSON.parse(bazaRaw);
   const bazaUsers = baza.PROSERVERS || [];
 

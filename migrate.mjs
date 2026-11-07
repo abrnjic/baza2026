@@ -19,7 +19,7 @@ const db = getFirestore(app);
 
 async function migrate() {
   console.log("Reading baza.json...");
-  const rawData = fs.readFileSync('public/baza.json', 'utf8');
+  const rawData = fs.readFileSync('private/baza.json', 'utf8');
   const jsonData = JSON.parse(rawData);
   
   const initialData = [];

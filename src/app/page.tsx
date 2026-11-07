@@ -8,8 +8,11 @@ import { Search, Bell, Download, Upload, Plus, AlertTriangle, MessageSquare, Bot
 import { FaWhatsapp, FaViber, FaTelegramPlane } from 'react-icons/fa';
 import { MdEmail, MdMessage } from 'react-icons/md';
 import { SiSignal } from 'react-icons/si';
-import { parseISO, differenceInDays, isValid, format, addMonths, addYears, startOfMonth, endOfMonth, subMonths, isWithinInterval } from 'date-fns';
+import { format, addMonths, startOfMonth, endOfMonth, subMonths, isWithinInterval } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { getDaysUntilExpiration, isExpiringSoon, parseAnyDate } from '@/lib/expiration';
+import { DEFAULT_RENEWAL_TEMPLATE, getRenewals } from '@/lib/renewals';
+import RenewalReminders from '@/components/RenewalReminders';
 import * as xlsx from 'xlsx';
 import { callGemini, callGeminiChat, GeminiMessage, GeminiTool } from '@/lib/gemini';
 
@@ -46,33 +49,6 @@ const ContactIcon = ({ contact }: { contact: string }) => {
   if (c.includes('MESSANGER') || c.includes('MESSENGER')) return <MdMessage className="text-[#00B2FF] shrink-0" size={16} title={contact} />;
   if (c.includes('SIGNAL')) return <SiSignal className="text-[#3A76F0] shrink-0" size={16} title={contact} />;
   return <span className="text-slate-400 text-[10px] uppercase font-bold truncate max-w-[60px]" title={contact}>{contact || '-'}</span>;
-};
-
-const parseAnyDate = (dateStr: string): Date | null => {
-  if (!dateStr || dateStr === 'NaT') return null;
-  
-  // If it's an Excel serial number string (e.g., "45337")
-  if (/^\d+$/.test(dateStr) && parseInt(dateStr, 10) > 40000) {
-    const excelEpoch = new Date(1899, 11, 30); // Excel epoch starts at Dec 30 1899
-    const d = new Date(excelEpoch.getTime() + parseInt(dateStr, 10) * 86400000);
-    if (isValid(d)) return d;
-  }
-
-  // Try standard parse
-  let d = new Date(dateStr);
-  if (isValid(d)) return d;
-  
-  // Try DD.MM.YYYY, DD-MM-YYYY, or DD/MM/YYYY
-  const parts = dateStr.split(/[\.\-\/]/);
-  if (parts.length === 3) {
-    if (parts[0].length === 4) {
-      d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-    } else {
-      d = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
-    }
-    if (isValid(d)) return d;
-  }
-  return null;
 };
 
 export type SyncAction = 'NEW' | 'UPDATE' | 'UNCHANGED';
@@ -133,8 +109,24 @@ export default function Dashboard() {
   const [isSettingsModalOpen, setSettingsModalOpen] = useState(false);
   const [isAnalyticsModalOpen, setAnalyticsModalOpen] = useState(false);
   const [isManualSyncModalOpen, setManualSyncModalOpen] = useState(false);
-  const [selectedForNotification, setSelectedForNotification] = useState<Set<string>>(new Set());
-  const [isNotifyModalOpen, setNotifyModalOpen] = useState(false);
+  const [selectedSubscriptions, setSelectedSubscriptions] = useState<Set<string>>(new Set());
+  const [isRenewalsOpen, setRenewalsOpen] = useState(false);
+  const [isPromotionOpen, setPromotionOpen] = useState(false);
+  const reopenRenewals = useRef(false);
+  const [calendarDay, setCalendarDay] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const today = useMemo(() => parseAnyDate(calendarDay)!, [calendarDay]);
+
+  useEffect(() => {
+    const refreshDay = () => setCalendarDay(format(new Date(), 'yyyy-MM-dd'));
+    const timer = window.setInterval(refreshDay, 30_000);
+    window.addEventListener('focus', refreshDay);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshDay);
+    };
+  }, []);
+
+  const renewals = useMemo(() => getRenewals(data, today), [data, today]);
   const [isAIModalOpen, setAIModalOpen] = useState(false);
   const [isImportModalOpen, setImportModalOpen] = useState(false);
   const [noteModalContent, setNoteModalContent] = useState<string | null>(null);
@@ -285,15 +277,6 @@ export default function Dashboard() {
     };
   }, [isAuthenticated]);
 
-  const getDaysUntilExpiration = (dateStr: string) => {
-    const d = parseAnyDate(dateStr);
-    if (!d) return Infinity;
-    const now = new Date();
-    d.setHours(0,0,0,0);
-    now.setHours(0,0,0,0);
-    return differenceInDays(d, now);
-  };
-
   const processedData = useMemo(() => {
     let result = data.filter(item => (showArchived ? item.isArchived : !item.isArchived));
 
@@ -315,13 +298,10 @@ export default function Dashboard() {
 
     // Upcoming expirations, consistent with the overview card (0–7 days)
     if (expiresSoonFilter) {
-      result = result.filter(item => {
-        const days = getDaysUntilExpiration(item.expirationDate);
-        return days >= 0 && days <= 7;
-      });
+      result = result.filter(item => isExpiringSoon(getDaysUntilExpiration(item.expirationDate, today)));
     }
 
-    if (expiredFilter) result = result.filter(item => getDaysUntilExpiration(item.expirationDate) < 0);
+    if (expiredFilter) result = result.filter(item => getDaysUntilExpiration(item.expirationDate, today) < 0);
     if (appFilter) result = result.filter(item => appNameKey(formatAppName(item.app || '', settings.appNames)) === appNameKey(formatAppName(appFilter, settings.appNames)));
 
     if (unpaidFilter) {
@@ -330,8 +310,8 @@ export default function Dashboard() {
 
     // Date range filter
     if (filterStartDate) {
-      const start = new Date(filterStartDate);
-      if (isValid(start)) {
+      const start = parseAnyDate(filterStartDate);
+      if (start) {
         start.setHours(0, 0, 0, 0);
         result = result.filter(item => {
           if (!item.expirationDate || item.expirationDate === 'NaT') return false;
@@ -342,8 +322,8 @@ export default function Dashboard() {
     }
     
     if (filterEndDate) {
-      const end = new Date(filterEndDate);
-      if (isValid(end)) {
+      const end = parseAnyDate(filterEndDate);
+      if (end) {
         end.setHours(23, 59, 59, 999);
         result = result.filter(item => {
           if (!item.expirationDate || item.expirationDate === 'NaT') return false;
@@ -364,7 +344,7 @@ export default function Dashboard() {
     });
 
     return result;
-  }, [data, search, expiresSoonFilter, filterStartDate, filterEndDate, showArchived, unpaidFilter, expiredFilter, appFilter, sortBy, settings.appNames]);
+  }, [data, search, expiresSoonFilter, filterStartDate, filterEndDate, showArchived, unpaidFilter, expiredFilter, appFilter, sortBy, settings.appNames, today]);
 
   const groupedData = useMemo(() => {
     const map = new Map<string, {
@@ -445,25 +425,25 @@ export default function Dashboard() {
   };
 
   const handleBulkAction = async (action: 'extend' | 'paid' | 'archive' | 'delete', extendDuration?: string) => {
-    if (selectedForNotification.size === 0) return;
+    if (selectedSubscriptions.size === 0) return;
     
     if (action === 'delete') {
-      if (!window.confirm(`Jeste li sigurni da želite obrisati ${selectedForNotification.size} odabranih korisnika? Ovo se ne može poništiti.`)) return;
-      for (const id of selectedForNotification) {
+      if (!window.confirm(`Jeste li sigurni da želite obrisati ${selectedSubscriptions.size} odabranih korisnika? Ovo se ne može poništiti.`)) return;
+      for (const id of selectedSubscriptions) {
         await deleteSubscription(id);
       }
     } else if (action === 'archive') {
-      if (!window.confirm(`Arhivirati ${selectedForNotification.size} odabranih korisnika?`)) return;
-      for (const id of selectedForNotification) {
+      if (!window.confirm(`Arhivirati ${selectedSubscriptions.size} odabranih korisnika?`)) return;
+      for (const id of selectedSubscriptions) {
         await updateSubscription(id, { isArchived: true });
       }
     } else if (action === 'paid') {
-      for (const id of selectedForNotification) {
+      for (const id of selectedSubscriptions) {
         await updateSubscription(id, { isPaid: true });
       }
     } else if (action === 'extend' && extendDuration) {
-      if (!window.confirm(`Produžiti pretplatu za ${selectedForNotification.size} korisnika?`)) return;
-      for (const id of selectedForNotification) {
+      if (!window.confirm(`Produžiti pretplatu za ${selectedSubscriptions.size} korisnika?`)) return;
+      for (const id of selectedSubscriptions) {
         const user = data.find(u => u.id === id);
         if (user) {
           await handleExtend(id, user.expirationDate, extendDuration);
@@ -471,16 +451,16 @@ export default function Dashboard() {
       }
     }
     
-    setSelectedForNotification(new Set());
+    setSelectedSubscriptions(new Set());
   };
 
 
 
   const toggleSelection = (id: string) => {
-    const newSet = new Set(selectedForNotification);
+    const newSet = new Set(selectedSubscriptions);
     if (newSet.has(id)) newSet.delete(id);
     else newSet.add(id);
-    setSelectedForNotification(newSet);
+    setSelectedSubscriptions(newSet);
   };
 
   const handleLogout = async () => {
@@ -509,8 +489,8 @@ export default function Dashboard() {
   const activeData = data.filter(i => !i.isArchived);
   const stats = {
     totalActive: activeData.length,
-    expiringSoon: activeData.filter(i => { const days = getDaysUntilExpiration(i.expirationDate); return days >= 0 && days <= 7; }).length,
-    expired: activeData.filter(i => getDaysUntilExpiration(i.expirationDate) < 0).length,
+    expiringSoon: activeData.filter(i => isExpiringSoon(getDaysUntilExpiration(i.expirationDate, today))).length,
+    expired: activeData.filter(i => getDaysUntilExpiration(i.expirationDate, today) < 0).length,
     unpaid: activeData.filter(i => !i.isPaid).length,
     archived: data.filter(i => i.isArchived).length
   };
@@ -546,9 +526,9 @@ export default function Dashboard() {
         
         <div className="dashboard-actions flex gap-2 flex-wrap items-center">
           <button className="btn btn-primary" onClick={() => setNewModalOpen(true)}><Plus size={16}/> Dodaj korisnika</button>
-          <button onClick={() => setNotifyModalOpen(true)} className="btn btn-ghost"><Bell size={16}/> Obavijesti {selectedForNotification.size > 0 && `(${selectedForNotification.size})`}</button>
+          <button onClick={() => setRenewalsOpen(true)} className="btn btn-ghost"><Bell size={16}/> Podsjetnici · {renewals.groups.length} za poslati</button>
           <button
-            onClick={() => { resetFilters(); setSelectedForNotification(new Set()); setShowArchived(!showArchived); }}
+            onClick={() => { resetFilters(); setSelectedSubscriptions(new Set()); setShowArchived(!showArchived); }}
             className="btn btn-ghost"
             aria-pressed={showArchived}
           >
@@ -556,6 +536,7 @@ export default function Dashboard() {
             {showArchived ? 'Natrag na aktivne' : `Arhiva (${stats.archived})`}
           </button>
           <details className="tools-menu"><summary className="btn btn-ghost"><SettingsIcon size={16}/> Alati</summary><div className="tools-dropdown">
+          <button onClick={() => setPromotionOpen(true)} className="btn btn-sm btn-ghost"><MessageSquare size={16} /> Promocije</button>
           <button onClick={() => setAIModalOpen(true)} className="btn btn-sm btn-ghost border border-slate-700 text-indigo-400 hover:text-indigo-300">
             <Bot size={16} />
             AI Asistent
@@ -675,7 +656,7 @@ export default function Dashboard() {
             <label className="text-sm text-slate-400">Poredak <select className="glass-input ml-2" value={sortBy} onChange={e => setSortBy(e.target.value)}><option value="expiration">Najbliži istek</option><option value="name">Ime A–Ž</option><option value="newest">Najnovije dodano</option></select></label>
             {hasFilters && <button className="btn btn-ghost text-sm" onClick={resetFilters}><X size={14}/> Očisti filtre</button>}
           </div>
-          <span role="status" className="text-sm text-slate-400">{processedData.length} pretplata{selectedForNotification.size > 0 && ` · ${selectedForNotification.size} odabrano`}</span>
+          <span role="status" className="text-sm text-slate-400">{processedData.length} pretplata{selectedSubscriptions.size > 0 && ` · ${selectedSubscriptions.size} odabrano`}</span>
         </div>
         {/* Table Container */}
         <div className="subscription-table overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/50">
@@ -683,9 +664,9 @@ export default function Dashboard() {
             <thead>
               <tr className="bg-slate-800/80 text-slate-300 text-sm uppercase tracking-wider">
                 <th className="py-3 px-3 font-semibold w-12 text-center">
-                  <input type="checkbox" aria-label="Odaberi sve prikazane pretplate" checked={processedData.length > 0 && processedData.every(row => selectedForNotification.has(row.id))} onChange={(e) => {
-                    if (e.target.checked) setSelectedForNotification(new Set(processedData.map(d => d.id)));
-                    else setSelectedForNotification(new Set());
+                  <input type="checkbox" aria-label="Odaberi sve prikazane pretplate" checked={processedData.length > 0 && processedData.every(row => selectedSubscriptions.has(row.id))} onChange={(e) => {
+                    if (e.target.checked) setSelectedSubscriptions(new Set(processedData.map(d => d.id)));
+                    else setSelectedSubscriptions(new Set());
                   }} />
                 </th>
                 <th className="py-3 px-3 font-semibold">Ime i Prezime</th>
@@ -702,8 +683,8 @@ export default function Dashboard() {
                 <tr><td colSpan={6} className="p-8 text-center text-slate-500">Nema pretplata za ovaj prikaz.{hasFilters && <button onClick={resetFilters} className="btn btn-ghost mx-auto mt-3">Očisti filtre</button>}</td></tr>
               ) : (
                 processedData.map((row) => {
-                  const daysLeft = getDaysUntilExpiration(row.expirationDate);
-                  const isExpiringSoon = daysLeft <= 7 && daysLeft >= 0;
+                  const daysLeft = getDaysUntilExpiration(row.expirationDate, today);
+                  const expiringSoon = isExpiringSoon(daysLeft);
                   const isExpired = daysLeft < 0;
                   
                   return (
@@ -711,13 +692,13 @@ export default function Dashboard() {
                       key={row.id} 
                       className={cn(
                         "group border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors",
-                        isExpired ? "bg-red-950/10" : isExpiringSoon ? "bg-amber-950/10" : ""
+                        isExpired ? "bg-red-950/10" : expiringSoon ? "bg-amber-950/10" : ""
                       )}
                     >
                       <td className="py-2 px-3 text-center">
                         <input 
                           type="checkbox" 
-                          checked={selectedForNotification.has(row.id)}
+                          checked={selectedSubscriptions.has(row.id)}
                           onChange={() => toggleSelection(row.id)}
                           className="w-4 h-4 rounded border-slate-600 text-primary focus:ring-primary"
                         />
@@ -750,11 +731,11 @@ export default function Dashboard() {
                         <div className="flex items-center gap-1.5 whitespace-nowrap">
                           <span className={cn(
                             "font-bold text-sm px-2 py-1 rounded-md",
-                            isExpired ? "bg-red-500/20 text-red-400 border border-red-500/30" : isExpiringSoon ? "bg-amber-500/20 text-amber-400 border border-amber-500/30" : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                            isExpired ? "bg-red-500/20 text-red-400 border border-red-500/30" : expiringSoon ? "bg-amber-500/20 text-amber-400 border border-amber-500/30" : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
                           )}>
                             {row.expirationDate ? (parseAnyDate(row.expirationDate) ? format(parseAnyDate(row.expirationDate)!, 'dd.MM.yyyy') : row.expirationDate) : '-'}
                           </span>
-                          {(isExpiringSoon || isExpired) && (
+                          {(expiringSoon || isExpired) && (
                             <span className={cn("text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider", isExpired ? "bg-red-500/20 text-red-400" : "bg-amber-500/20 text-amber-400")}>
                               {isExpired ? "ISTEKLO" : `${Math.ceil(daysLeft)}d`}
                             </span>
@@ -908,7 +889,14 @@ export default function Dashboard() {
           subscription={isEditModalOpen} 
           presetData={typeof isNewModalOpen === 'object' ? isNewModalOpen : undefined}
           settings={settings}
-          onClose={() => { setEditModalOpen(null); setNewModalOpen(false); }} 
+          onClose={() => {
+            setEditModalOpen(null);
+            setNewModalOpen(false);
+            if (reopenRenewals.current) {
+              reopenRenewals.current = false;
+              setRenewalsOpen(true);
+            }
+          }}
         />
       )}
 
@@ -939,13 +927,25 @@ export default function Dashboard() {
         />
       )}
       
-      {/* Notifications */}
-      {isNotifyModalOpen && (
-        <NotifyControlCenterModal 
-          selectedIds={Array.from(selectedForNotification)} 
-          data={processedData} 
+      {isRenewalsOpen && (
+        <RenewalReminders
+          renewals={renewals}
+          template={settings.renewalMessageTemplate?.trim() || DEFAULT_RENEWAL_TEMPLATE}
+          onEditContact={subscription => {
+            reopenRenewals.current = true;
+            setRenewalsOpen(false);
+            setEditModalOpen(subscription);
+          }}
+          onClose={() => setRenewalsOpen(false)}
+        />
+      )}
+
+      {isPromotionOpen && (
+        <PromotionModal
+          selectedIds={Array.from(selectedSubscriptions)}
+          data={processedData}
           apiKey={settings.geminiApiKey || ''}
-          onClose={() => setNotifyModalOpen(false)} 
+          onClose={() => setPromotionOpen(false)}
         />
       )}
 
@@ -1045,11 +1045,11 @@ export default function Dashboard() {
       )}
 
       {/* Bulk Actions Floating Bar */}
-      {selectedForNotification.size > 0 && (
+      {selectedSubscriptions.size > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 animate-in slide-in-from-bottom-10 fade-in duration-300">
           <div className="glass-panel py-3 px-6 rounded-full shadow-2xl shadow-indigo-500/20 flex items-center gap-4 border border-indigo-500/30">
             <span className="bg-indigo-500 text-white font-bold w-8 h-8 rounded-full flex items-center justify-center text-sm shadow-inner shadow-white/20">
-              {selectedForNotification.size}
+              {selectedSubscriptions.size}
             </span>
             <span className="text-slate-200 font-medium whitespace-nowrap">Odabranih</span>
             <div className="w-px h-6 bg-slate-700/50 mx-2"></div>
@@ -1098,7 +1098,7 @@ export default function Dashboard() {
             </button>
 
             <button 
-              onClick={() => setSelectedForNotification(new Set())}
+              onClick={() => setSelectedSubscriptions(new Set())}
               className="ml-2 text-slate-500 hover:text-slate-300 bg-slate-800/50 hover:bg-slate-800 rounded-full p-1.5 transition-colors"
             >
               <X size={16} />
@@ -1149,12 +1149,16 @@ function EditModal({ subscription, settings, onClose, presetData }: { subscripti
     name: '', app: '', contact: '', macAddress: '', deviceKey: '', expirationDate: '', isPaid: false, email: '', phone: '', note: ''
   });
 
+  const expirationDate = parseAnyDate(formData.expirationDate || '');
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isNew) {
       await addSubscription(formData as any);
     } else {
-      await updateSubscription(subscription!.id, formData);
+      const updates = { ...formData };
+      delete updates.renewalReminders;
+      await updateSubscription(subscription!.id, updates);
     }
     onClose();
   };
@@ -1207,7 +1211,7 @@ function EditModal({ subscription, settings, onClose, presetData }: { subscripti
             </div>
             <div>
               <label className="block text-sm text-slate-400 mb-1">Datum Isteka</label>
-              <input type="date" className="w-full glass-input" value={formData.expirationDate ? formData.expirationDate.split(' ')[0] : ''} onChange={e => setFormData({...formData, expirationDate: e.target.value})} />
+              <input type="date" className="w-full glass-input" value={expirationDate ? format(expirationDate, 'yyyy-MM-dd') : ''} onChange={e => setFormData({...formData, expirationDate: e.target.value})} />
             </div>
             <div>
               <label className="block text-sm text-slate-400 mb-1">MAC Adresa</label>
@@ -1441,6 +1445,7 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
   const [templates, setTemplates] = useState(settings.messageTemplates || []);
   const [tags, setTags] = useState(settings.availableTags || []);
   const [newTag, setNewTag] = useState("");
+  const [renewalMessageTemplate, setRenewalMessageTemplate] = useState(settings.renewalMessageTemplate || DEFAULT_RENEWAL_TEMPLATE);
   const [quickMessageTemplate, setQuickMessageTemplate] = useState(settings.quickMessageTemplate || "Poštovani {ime}, podsjećamo vas na vašu pretplatu.");
   const [cjenikTitle, setCjenikTitle] = useState(settings.cjenikTitle || "Odaberite Svoj Paket");
   const [cjenikSubtitle, setCjenikSubtitle] = useState(settings.cjenikSubtitle || "Uživajte u tisućama kanala, najnovijim filmovima i serijama u 4K rezoluciji. Bez ugovorne obveze, otkažite bilo kada.");
@@ -1451,23 +1456,30 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
     "Prihvaćamo razne načine plaćanja (PayPal, Kriptovalute, Bankovni prijenos)."
   ]);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [activeTab, setActiveTab] = useState<'general' | 'prices' | 'messages' | 'tags'>('general');
 
   const handleSave = async () => {
+    setSaveError('');
     if (editingApp !== null) {
       setAppError('Najprije potvrdi izmijenjeni naziv ili odustani od uređivanja.');
+      return;
+    }
+    if (!/\{datum\}/i.test(renewalMessageTemplate)) {
+      setSaveError('Predložak podsjetnika mora sadržavati {datum}.');
+      setActiveTab('messages');
       return;
     }
     setSaving(true);
     try {
       await updateSettings({
         apps: sortedUniqueApps(apps, appNames), appNames, contacts, geminiApiKey, prices, availableTags: tags, messageTemplates: templates,
-        cjenikTitle, cjenikSubtitle, cjenikNotes, quickMessageTemplate
+        cjenikTitle, cjenikSubtitle, cjenikNotes, quickMessageTemplate, renewalMessageTemplate: renewalMessageTemplate.trim()
       });
       onClose();
     } catch (error) {
       console.error('Spremanje postavki nije uspjelo', error);
-      setAppError('Postavke nisu spremljene. Pokušaj ponovno.');
+      setSaveError('Postavke nisu spremljene. Pokušaj ponovno.');
     } finally {
       setSaving(false);
     }
@@ -1659,7 +1671,7 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
 
         <div className="mt-8 bg-slate-900/50 rounded-xl p-4 border border-slate-800">
           <h3 className="text-lg font-semibold text-slate-200 mb-2">Umjetna Inteligencija (Google Gemini API)</h3>
-          <p className="text-sm text-slate-400 mb-4">Unesite Vaš privatni Gemini API ključ kako bi AI Asistent i Kontrolni Centar za Obavijesti funkcionirali. Ključ se sigurno sprema na Vaš Firebase.</p>
+          <p className="text-sm text-slate-400 mb-4">Unesite Vaš privatni Gemini API ključ za AI Asistenta i izradu promotivnih poruka.</p>
           <input 
             type="password" 
             className="glass-input w-full" 
@@ -1724,7 +1736,7 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
         {activeTab === 'messages' && (
           <div className="bg-slate-900/50 rounded-xl p-4 border border-slate-800">
             <h3 className="text-lg font-semibold text-slate-200 mb-2">Predlošci za Poruke</h3>
-            <p className="text-sm text-slate-400 mb-6">Ove poruke možete brzo odabrati kod slanja obavijesti. Koristite `{"{ime}"}` da ubacite ime korisnika.</p>
+            <p className="text-sm text-slate-400 mb-6">Uredi poruke koje aplikacija priprema za korisnike.</p>
             
             <div className="bg-slate-800/80 p-4 rounded-lg border border-indigo-500/30 mb-8">
               <h4 className="text-md font-semibold text-indigo-400 mb-2">Poruka za brzi gumb (u tablici)</h4>
@@ -1736,7 +1748,19 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
               />
             </div>
             
-            <h4 className="text-md font-semibold text-slate-300 mb-4">Ostali predlošci (za Kontrolni Centar)</h4>
+            <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700 mb-8">
+              <label htmlFor="renewal-template" className="block font-semibold text-slate-200">Podsjetnik za obnovu</label>
+              <p id="renewal-template-hint" className="text-xs text-slate-400 my-2">{"{ime}"} umeće ime, a {"{datum}"} sve rokove iz poruke.</p>
+              <textarea
+                id="renewal-template"
+                aria-describedby="renewal-template-hint"
+                className="w-full glass-input h-24 text-sm"
+                value={renewalMessageTemplate}
+                onChange={event => { setRenewalMessageTemplate(event.target.value); setSaveError(''); }}
+              />
+            </div>
+
+            <h4 className="text-md font-semibold text-slate-300 mb-4">Ostali spremljeni predlošci</h4>
             <div className="space-y-4">
               {templates.map((tpl, idx) => (
                 <div key={tpl.id} className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
@@ -1880,6 +1904,7 @@ function SettingsModal({ data, settings, onClose, onOpenManualSync }: { data: Su
           </div>
         )}
 
+        {saveError && <p role="alert" className="mt-4 text-sm text-amber-400">{saveError}</p>}
         <div className="flex justify-end gap-4 mt-8 pt-4 border-t border-slate-800">
           <button onClick={onClose} className="btn btn-ghost">Odustani</button>
           <button onClick={handleSave} disabled={saving} className="btn btn-primary flex items-center gap-2">
@@ -2199,78 +2224,13 @@ Važna pravila:
   );
 }
 
-function NotifyControlCenterModal({ selectedIds, data, apiKey, onClose }: { selectedIds: string[], data: Subscription[], apiKey: string, onClose: () => void }) {
-  const [activeTab, setActiveTab] = useState<'expiration' | 'promotion'>('expiration');
-  const [template, setTemplate] = useState("Poštovani, vaša pretplata uskoro ističe. Molimo Vas da ju obnovite.");
-  const [promoTemplate, setPromoTemplate] = useState("Poštovani, iskoristite našu novu promociju za vjerne korisnike!");
+function PromotionModal({ selectedIds, data, apiKey, onClose }: { selectedIds: string[], data: Subscription[], apiKey: string, onClose: () => void }) {
+  const [currentTemplate, setCurrentTemplate] = useState('Poštovani, iskoristite našu novu promociju za vjerne korisnike!');
   const [aiLoading, setAiLoading] = useState(false);
-  
-  const currentTemplate = activeTab === 'expiration' ? template : promoTemplate;
-  const setCurrentTemplate = activeTab === 'expiration' ? setTemplate : setPromoTemplate;
-  
-  // Selection state inside modal
-  const [modalSelectedIds, setModalSelectedIds] = useState<string[]>([]);
-  
-  // Queue state
+  const [modalSelectedIds, setModalSelectedIds] = useState(selectedIds);
   const [queueIndex, setQueueIndex] = useState<number | null>(null);
+  const tabUsers = useMemo(() => data.slice().sort((a, b) => a.name.localeCompare(b.name, 'hr')), [data]);
 
-  // Users data for current tab
-  const tabUsers = useMemo(() => {
-    if (activeTab === 'expiration') {
-      const filtered = data.filter(u => {
-        if (!u.expirationDate) return false;
-        const parsed = parseAnyDate(u.expirationDate);
-        if (!parsed) return false;
-        const now = new Date();
-        parsed.setHours(0,0,0,0);
-        now.setHours(0,0,0,0);
-        const daysLeft = differenceInDays(parsed, now);
-        return daysLeft <= 5 && daysLeft >= -30;
-      });
-      return filtered.sort((a,b) => {
-        const da = parseAnyDate(a.expirationDate || '');
-        const db = parseAnyDate(b.expirationDate || '');
-        if (da && db) return da.getTime() - db.getTime();
-        return 0;
-      });
-    } else {
-      // Promotions tab shows all users, sorting alphabetically
-      return data.slice().sort((a,b) => a.name.localeCompare(b.name));
-    }
-  }, [data, activeTab]);
-
-  // Grouping logic for expiration tab
-  const groups = useMemo(() => {
-    const g = {
-      expired: [] as Subscription[],
-      today: [] as Subscription[],
-      tomorrow: [] as Subscription[],
-      soon: [] as Subscription[],
-      later: [] as Subscription[]
-    };
-    if (activeTab === 'promotion') return g;
-    
-    tabUsers.forEach(u => {
-      if (!u.expirationDate) return;
-      const parsed = parseAnyDate(u.expirationDate);
-      if (!parsed) return;
-      const daysLeft = differenceInDays(parsed, new Date());
-      
-      if (daysLeft < 0) g.expired.push(u);
-      else if (daysLeft === 0) g.today.push(u);
-      else if (daysLeft === 1) g.tomorrow.push(u);
-      else if (daysLeft <= 3) g.soon.push(u);
-      else g.later.push(u);
-    });
-    return g;
-  }, [tabUsers, activeTab]);
-
-  useEffect(() => {
-    if (selectedIds.length > 0) {
-      setModalSelectedIds(selectedIds);
-    }
-  }, [selectedIds]);
-  
   const handleToggleSelect = (id: string) => {
     setModalSelectedIds(prev => 
       prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
@@ -2288,16 +2248,11 @@ function NotifyControlCenterModal({ selectedIds, data, apiKey, onClose }: { sele
     }
   };
 
-  const handleGenerateAI = async (contextText: string) => {
-    if (!apiKey) return alert("Molimo unesite Gemini API ključ u postavkama!");
+  const handleGenerateAI = async () => {
+    if (!apiKey) return alert('Molimo unesite Gemini API ključ u postavkama!');
     setAiLoading(true);
     try {
-      let prompt = "";
-      if (activeTab === 'expiration') {
-        prompt = `Napiši kratku, prijateljsku poruku za korisnika kojem pretplata za televiziju ističe: ${contextText}. Poruka treba biti profesionalna i potaknuti ga na produljenje. Bez placeholder varijabli poput [Ime] nego ostavi univerzalno (npr. Poštovani, ...). Na hrvatskom jeziku, max 3 rečenice.`;
-      } else {
-        prompt = `Napiši kratku, prijateljsku PROMOTIVNU poruku za korisnika usluge televizije. Poruka treba nuditi neku pogodnost, popust ili novost, te potaknuti interes. Bez placeholder varijabli poput [Ime] nego ostavi univerzalno (npr. Poštovani, ...). Na hrvatskom jeziku, max 3 rečenice.`;
-      }
+      const prompt = 'Napiši kratku promotivnu poruku na hrvatskom jeziku za korisnika usluge televizije, do 3 rečenice. Nemoj izmišljati cijene ili pogodnosti.';
       const reply = await callGemini(prompt, "Ti si stručnjak za komunikaciju i prodaju.", apiKey);
       setCurrentTemplate(reply);
     } catch (err) {
@@ -2351,78 +2306,13 @@ function NotifyControlCenterModal({ selectedIds, data, apiKey, onClose }: { sele
       window.open(generateMessageLink(validQueueUsers[nextIndex].phone!, msg, validQueueUsers[nextIndex].contact), '_blank');
     } else {
       setQueueIndex(null);
-      alert("Slanje završeno!");
+      alert("Svi razgovori iz reda su otvoreni.");
       setModalSelectedIds([]);
     }
   };
   
   const stopQueue = () => {
     setQueueIndex(null);
-  };
-
-  const renderGroup = (title: string, users: Subscription[], urgencyText: string) => {
-    if (users.length === 0) return null;
-    const groupIds = users.map(u => u.id);
-    const allSelected = groupIds.every(id => modalSelectedIds.includes(id));
-    const someSelected = groupIds.some(id => modalSelectedIds.includes(id));
-
-    return (
-      <div className="mb-8">
-        <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-2">
-          <div className="flex items-center gap-3">
-            <input 
-              type="checkbox" 
-              checked={allSelected} 
-              ref={input => { if (input) input.indeterminate = someSelected && !allSelected; }}
-              onChange={() => handleToggleGroup(users)}
-              className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-600 focus:ring-purple-600 focus:ring-offset-slate-900"
-            />
-            <h3 className="text-lg font-bold text-slate-200 flex items-center gap-2">
-              {title} <span className="bg-slate-800 px-2 py-0.5 rounded-full text-xs">{users.length}</span>
-            </h3>
-          </div>
-          <button 
-            onClick={() => handleGenerateAI(urgencyText)}
-            disabled={aiLoading}
-            className="text-xs bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 px-3 py-1 rounded-full flex items-center gap-1 transition-colors"
-          >
-            <Bot size={14} /> AI Predložak
-          </button>
-        </div>
-        <div className="space-y-3">
-          {users.map(user => (
-            <div key={user.id} className="flex flex-col md:flex-row md:items-center justify-between bg-slate-800/50 p-3 rounded-lg border border-slate-700/50 gap-4 hover:border-slate-600 transition-colors">
-              <div className="flex items-center gap-3">
-                <input 
-                  type="checkbox" 
-                  checked={modalSelectedIds.includes(user.id)} 
-                  onChange={() => handleToggleSelect(user.id)}
-                  className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-600 focus:ring-purple-600 focus:ring-offset-slate-900"
-                />
-                <div>
-                  <div className="text-slate-200 font-medium">{user.name}</div>
-                  <div className="text-sm text-slate-400">Istek: {user.expirationDate} {user.phone ? `| Tel: ${user.phone}` : '| Nema unesen broj!'}</div>
-                </div>
-              </div>
-              {user.phone ? (
-                <a 
-                  href={generateMessageLink(user.phone, parseMessageTemplate(currentTemplate, user), user.contact)} 
-                  onClick={() => navigator.clipboard.writeText(parseMessageTemplate(currentTemplate, user)).catch(() => {})}
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="btn bg-green-600/90 hover:bg-green-500 text-white flex items-center gap-2 whitespace-nowrap text-sm px-4 py-1.5"
-                >
-                  <MessageSquare size={16} />
-                  WhatsApp
-                </a>
-              ) : (
-                <button disabled className="btn bg-slate-700 text-slate-500 cursor-not-allowed text-sm px-4 py-1.5">Nema broja</button>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    );
   };
 
   const isQueueActive = queueIndex !== null;
@@ -2433,25 +2323,9 @@ function NotifyControlCenterModal({ selectedIds, data, apiKey, onClose }: { sele
         <div className="flex items-center justify-between mb-4 shrink-0">
           <div className="flex items-center gap-3 text-white">
             <Bell size={28} className="text-amber-400" />
-            <h2 className="text-2xl font-bold">Kontrolni Centar Obavijesti</h2>
+            <h2 className="text-2xl font-bold">Promocije</h2>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={24} /></button>
-        </div>
-        
-        {/* Tabs */}
-        <div className="flex gap-2 mb-6 border-b border-slate-700/50 pb-2 shrink-0">
-          <button 
-            onClick={() => { setActiveTab('expiration'); setModalSelectedIds([]); }}
-            className={cn("px-4 py-2 rounded-t-lg font-medium transition-colors border-b-2", activeTab === 'expiration' ? "border-amber-400 text-amber-400 bg-amber-400/10" : "border-transparent text-slate-400 hover:text-slate-200")}
-          >
-            Istek Pretplate
-          </button>
-          <button 
-            onClick={() => { setActiveTab('promotion'); setModalSelectedIds([]); }}
-            className={cn("px-4 py-2 rounded-t-lg font-medium transition-colors border-b-2", activeTab === 'promotion' ? "border-emerald-400 text-emerald-400 bg-emerald-400/10" : "border-transparent text-slate-400 hover:text-slate-200")}
-          >
-            Promotivne Poruke
-          </button>
         </div>
         
         <div className="bg-slate-900/50 p-5 rounded-xl border border-slate-800 mb-4 shrink-0 relative">
@@ -2459,15 +2333,13 @@ function NotifyControlCenterModal({ selectedIds, data, apiKey, onClose }: { sele
             <label className="text-sm font-bold text-emerald-400 flex items-center gap-2">
               <MessageSquare size={16} /> Vaša trenutna poruka za slanje:
             </label>
-            {activeTab === 'promotion' && (
-              <button 
-                onClick={() => handleGenerateAI('promocija')}
-                disabled={aiLoading}
-                className="text-xs bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 px-3 py-1 rounded-full flex items-center gap-1 transition-colors"
-              >
-                <Bot size={14} /> AI Predložak
-              </button>
-            )}
+            <button
+              onClick={handleGenerateAI}
+              disabled={aiLoading}
+              className="text-xs bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 px-3 py-1 rounded-full flex items-center gap-1 transition-colors"
+            >
+              <Bot size={14} /> AI Predložak
+            </button>
           </div>
           <textarea 
             className="w-full bg-slate-950/50 border border-slate-700 rounded-lg p-4 text-slate-200 focus:outline-none focus:border-emerald-500/50 transition-colors h-24" 
@@ -2497,7 +2369,7 @@ function NotifyControlCenterModal({ selectedIds, data, apiKey, onClose }: { sele
               className="btn btn-sm bg-purple-600 hover:bg-purple-500 text-white flex items-center gap-2 disabled:opacity-50"
             >
               <MessageSquare size={16} />
-              Pošalji Odabranima (Queue)
+              Otvori razgovore
             </button>
           </div>
         </div>
@@ -2506,10 +2378,10 @@ function NotifyControlCenterModal({ selectedIds, data, apiKey, onClose }: { sele
         {isQueueActive && (
           <div className="mb-4 shrink-0 bg-amber-500/20 border border-amber-500/50 p-4 rounded-xl flex items-center justify-between shadow-[0_0_15px_rgba(245,158,11,0.2)]">
             <div>
-              <h4 className="font-bold text-amber-400 text-lg mb-1">Slanje u tijeku...</h4>
+              <h4 className="font-bold text-amber-400 text-lg mb-1">Razgovori u redu</h4>
               <p className="text-amber-200/80 text-sm">
-                Trenutno šaljemo: <strong>{queueIndex + 1}</strong> od <strong>{validQueueUsers.length}</strong>. 
-                Nakon što pritisnete pošalji u WhatsAppu, vratite se ovdje i kliknite Sljedeći.
+                Trenutni razgovor: <strong>{queueIndex + 1}</strong> od <strong>{validQueueUsers.length}</strong>.
+                Nakon što pošaljete poruku, vratite se ovdje i kliknite Sljedeći.
               </p>
             </div>
             <div className="flex gap-3">
@@ -2517,7 +2389,7 @@ function NotifyControlCenterModal({ selectedIds, data, apiKey, onClose }: { sele
                 Prekini
               </button>
               <button onClick={handleQueueNext} className="btn bg-green-600 hover:bg-green-500 text-white font-bold shadow-lg shadow-green-900/50">
-                {queueIndex + 1 < validQueueUsers.length ? 'Sljedeći korisnik →' : 'Završi slanje'}
+                {queueIndex + 1 < validQueueUsers.length ? 'Sljedeći korisnik →' : 'Završi pregled'}
               </button>
             </div>
           </div>
@@ -2529,15 +2401,6 @@ function NotifyControlCenterModal({ selectedIds, data, apiKey, onClose }: { sele
               Nema korisnika za prikaz u ovoj kategoriji.
             </div>
           ) : (
-            activeTab === 'expiration' ? (
-              <>
-                {renderGroup("🔴 Već isteklo", groups.expired, "jučer ili ranije")}
-                {renderGroup("🟠 Ističe DANAS", groups.today, "danas")}
-                {renderGroup("🟡 Ističe SUTRA", groups.tomorrow, "sutra")}
-                {renderGroup("🟢 Ističe USKORO (2-3 dana)", groups.soon, "za 2 do 3 dana")}
-                {renderGroup("🔵 Ističe ZA 4-5 DANA", groups.later, "za 4 do 5 dana")}
-              </>
-            ) : (
               <div className="space-y-3 mt-2">
                 <div className="flex items-center gap-3 mb-4 px-1">
                   <input 
@@ -2579,7 +2442,6 @@ function NotifyControlCenterModal({ selectedIds, data, apiKey, onClose }: { sele
                   </div>
                 ))}
               </div>
-            )
           )}
         </div>
         
